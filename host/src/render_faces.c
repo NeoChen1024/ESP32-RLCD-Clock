@@ -11,13 +11,13 @@
  *
  * Fonts (built into u8g2):
  *   big time     : u8g2_font_inr42_mr   (42px, has ':' digits symbols)
- *   scale values : u8g2_font_courB24_tr (24px courier bold, full charset)
+ *   scale values : u8g2_font_courB18_tr (18px courier bold, full charset)
  *   labels/mono  : u8g2_font_7x13_tr
  *   top/bottom   : u8g2_font_5x8_tr
  */
 
 #define FONT_BIG     u8g2_font_inr42_mr
-#define FONT_SCALE   u8g2_font_courB24_tr
+#define FONT_SCALE   u8g2_font_courB18_tr
 #define FONT_MONO    u8g2_font_7x13_tr
 #define FONT_SMALL   u8g2_font_5x8_tr
 
