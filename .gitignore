@@ -1,0 +1,17 @@
+# build / cmake
+host/build/
+build/
+compile_commands.json
+
+# clangd / LSP cache
+.cache/
+host/.cache/
+
+# screenshots / runtime artifacts
+*.pbm
+rlcd_screenshot.pbm
+
+# editor / OS
+*.swp
+.DS_Store
+*~
