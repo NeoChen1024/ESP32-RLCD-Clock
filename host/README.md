@@ -11,7 +11,7 @@ host/
   CMakeLists.txt
   src/
     main.c            SDL3 main loop, 15 Hz frame cap, keyboard input
-    time_model.{h,c}  integer time-scale derivations (MJD-TAI, GPS week/SOW, civil, ISO week)
+    time_model.{h,c}  integer time-scale derivations (MJD-TAI, GPS week/TOW, civil, ISO week)
     render_faces.{h,c} u8g2 draw calls for the single all-in-one face
     sdl3_backend.{h,c} u8g2 display callback + SDL3 presenter (400x300 visible, 400x304 buffer)
   tests/

@@ -86,9 +86,9 @@ static void fmt_mjd_tai(const clock_model_t *m, char *out, size_t n)
 
 static void fmt_gps(const clock_model_t *m, char *out, size_t n)
 {
-    int64_t w, sow;
-    gps_week_sow(m, &w, &sow);
-    snprintf(out, n, "W=%04lld SOW=%06lld", (long long)w, (long long)sow);
+    int64_t w, tow;
+    gps_week_tow(m, &w, &tow);
+    snprintf(out, n, "W=%04lld TOW=%06lld", (long long)w, (long long)tow);
 }
 
 static void fmt_iso_week(const clock_model_t *m, char *out, size_t n)
@@ -171,13 +171,13 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
         draw_scale_placeholder(g, y, "MJDTAI", "--------.-------");
     }
 
-    /* GPS week / SOW */
+    /* GPS week / TOW */
     y += 30;
     if (m->time_trusted) {
         char gpsbuf[24]; fmt_gps(m, gpsbuf, sizeof gpsbuf);
         draw_label_value(g, y, "GPS", gpsbuf);
     } else {
-        draw_scale_placeholder(g, y, "GPS", "W---- SOW------");
+        draw_scale_placeholder(g, y, "GPS", "W---- TOW------");
     }
 
     /* offset constants row: all three TAI/UTC/GPS deltas together */

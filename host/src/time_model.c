@@ -32,15 +32,15 @@ void mjd_tai(const clock_model_t *m, int64_t *day, int64_t *frac_1e7)
     *frac_1e7 = rem_ms * 10000000LL / 86400000LL;
 }
 
-/* ---- GPS week / SOW ---- */
+/* ---- GPS week / TOW ---- */
 
-void gps_week_sow(const clock_model_t *m, int64_t *week, int64_t *sow)
+void gps_week_tow(const clock_model_t *m, int64_t *week, int64_t *tow)
 {
     int64_t unix_s = m->unix_ms / 1000LL;
     int64_t gps_s  = unix_s - UNIX_TO_GPS_EPOCH_S + GPS_MINUS_UTC_SECONDS;
     if (gps_s < 0) gps_s += 604800LL;  /* safety; not expected for current era */
     *week = gps_s / 604800LL;
-    *sow  = gps_s % 604800LL;
+    *tow  = gps_s % 604800LL;
 }
 
 /* ---- civil fields ---- */

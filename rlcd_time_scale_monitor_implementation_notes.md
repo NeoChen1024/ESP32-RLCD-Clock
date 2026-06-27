@@ -1,6 +1,6 @@
 # RLCD Time Scale Monitor — Implementation Notes
 
-Design reference for a Waveshare ESP32-S3 RLCD 4.2 board acting as an NTP/RTC-based time-scale instrument. 400×300 reflective monochrome display showing ISO-8601 civil time, UTC, TAI-based MJD, GPS Week/SOW, sync state, temperature/humidity, battery and Wi-Fi status.
+Design reference for a Waveshare ESP32-S3 RLCD 4.2 board acting as an NTP/RTC-based time-scale instrument. 400×300 reflective monochrome display showing ISO-8601 civil time, UTC, TAI-based MJD, GPS Week/TOW, sync state, temperature/humidity, battery and Wi-Fi status.
 
 ---
 
@@ -31,7 +31,7 @@ When unsynced, show placeholders — never fake-precise values:
 ```text
 TIME   UNSYNC
 MJDTAI --------.-------
-GPS    W---- SOW------
+GPS    W---- TOW------
 ```
 
 ---
@@ -47,7 +47,7 @@ Carry over the fixed-grid instrument aesthetic from the old GPS clock (14×6 Nok
 ```text
 Top bar       24 px   date, status, sync age
 Main time     88 px   local time, big numeric font
-UTC/scales    96 px   UTC, MJDTAI, GPS week/SOW
+UTC/scales    96 px   UTC, MJDTAI, GPS week/TOW
 Telemetry     64 px   temp, humidity, battery, Wi-Fi
 Margin        28 px   spacing / separators
 ```
@@ -60,7 +60,7 @@ At 8×16 monospace this is roughly 50 columns × 18 rows — far more room than 
 
 ### 3.1 Core time scales
 
-Local civil time (ISO-8601), UTC (ISO-8601), ISO week date, MJD on TAI scale, GPS Week Number, GPS SOW, TAI−UTC offset, GPS−UTC offset, NTP sync age / trust state.
+Local civil time (ISO-8601), UTC (ISO-8601), ISO week date, MJD on TAI scale, GPS Week Number, GPS TOW, TAI−UTC offset, GPS−UTC offset, NTP sync age / trust state.
 
 ### 3.2 Leap second / TAI−UTC strategy
 
@@ -134,7 +134,7 @@ everything at once. Debug/config goes over the Serial console.
 │ ─────────────────────────────────────  │   separator
 │ ISO     2026-W25-7                     │   ISO week date
 │ MJDTAI  0061212.6374074                │   MJD on TAI scale
-│ GPS     W=2424 SOW=055053              │   GPS week / SOW
+│ GPS     W=2424 TOW=055053              │   GPS week / TOW
 │           dAT +37s  dUT +18s  dTG +19s │   TAI/UTC/GPS deltas
 │ ─────────────────────────────────────  │   separator
 │ [tmp] +28.4C  [rh] 61%  [bat] 3.91V   │   telemetry
@@ -145,7 +145,7 @@ everything at once. Debug/config goes over the Serial console.
 ### 4.1 Trust gating
 
 When `time_trusted` is false (boot unsynced / holdover lost), MJDTAI and GPS
-fields show placeholders (`--------.-------`, `W---- SOW------`) rather than
+fields show placeholders (`--------.-------`, `W---- TOW------`) rather than
 fake-precise values. The top-bar sync state code (`BOOT UNS` / `SYNC...` /
 `NTP OK` / `RTC HOLD` / `WIFI LOST`) is the single source of trust; there is
 no separate RTC-holdover indicator, `RTC HOLD` in the top bar already conveys it.
@@ -214,7 +214,7 @@ Keyboard: `1/2/3` page, `D` dense/large toggle, `N` cycle sync state, `W` Wi-Fi,
 
 ### 7.4 Test states
 
-normal / holdover / unsync / lowbat / old NTP age / MJD fractional rollover / GPS SOW rollover / GPS week rollover / UTC-local date crossing / ISO week across year boundary / status text overflow / temperature and humidity edge values.
+normal / holdover / unsync / lowbat / old NTP age / MJD fractional rollover / GPS TOW rollover / GPS week rollover / UTC-local date crossing / ISO week across year boundary / status text overflow / temperature and humidity edge values.
 
 ### 7.5 Framebuffer padding
 
@@ -306,7 +306,7 @@ Wrap a few helpers to isolate platform details: `draw_text_right`, `draw_label_v
 ## 11. Milestones
 
 1. **Host simulator skeleton** — SDL3 400×300 window + scaling, fake ClockModel, u8g2 render path, screenshot export
-2. **Time model** — Unix ms → local/UTC/MJD(TAI)/GPS week/SOW/ISO week, offset constants, edge-case tests
+2. **Time model** — Unix ms → local/UTC/MJD(TAI)/GPS week/TOW/ISO week, offset constants, edge-case tests
 3. **Fonts and icons** — BDF fonts + icon font, bdfconv build script, shared generated arrays for host/target
 4. **Main face layout** — single-face layout, screenshot export, golden screenshot review
 5. **ESP32 bring-up** — Arduino skeleton, u8g2 target backend, ST7305 init/flush, display_task, Serial CLI
@@ -334,7 +334,7 @@ Product         RLCD Time Scale Monitor
 Display         400×300 landscape monochrome
 Primary source  Wi-Fi SNTP/NTP
 Holdover        PCF85063 RTC / ESP32 system time
-Main fields     local time, UTC, MJD(TAI), GPS week/SOW
+Main fields     local time, UTC, MJD(TAI), GPS week/TOW
 Aesthetic       fixed-width time-scale telemetry instrument
 GUI framework   no LVGL
 Drawing engine  u8g2

@@ -10,7 +10,7 @@
  * All time-scale derivations use integer arithmetic only (no float/double)
  * to avoid readout jitter. Three independent paths from unix epoch:
  *   - MJD(TAI)        from unix_ms
- *   - GPS week/SOW    from unix_s
+ *   - GPS week/TOW    from unix_s
  *   - civil/UTC/ISO   from unix_ms
  *
  * Offsets are hardcoded (current and future display only; no leap-second
@@ -51,8 +51,8 @@ void time_model_now(clock_model_t *m);
 /* MJD(TAI): integer day + 7 fractional digits. */
 void mjd_tai(const clock_model_t *m, int64_t *day, int64_t *frac_1e7);
 
-/* GPS week + second-of-week. */
-void gps_week_sow(const clock_model_t *m, int64_t *week, int64_t *sow);
+/* GPS week + time-of-week. */
+void gps_week_tow(const clock_model_t *m, int64_t *week, int64_t *tow);
 
 /* Civil fields. tz_offset_min is the local UTC offset in minutes (e.g. +480). */
 void civil_fields(const clock_model_t *m, int tz_offset_min,

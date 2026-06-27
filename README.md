@@ -1,7 +1,7 @@
 # RLCD Time Scale Monitor
 
 A Waveshare ESP32-S3 RLCD 4.2 based **time-scale instrument** — a reflective
-monochrome 400×300 display showing local time, UTC, MJD(TAI), GPS week/SOW,
+monochrome 400×300 display showing local time, UTC, MJD(TAI), GPS week/TOW,
 ISO week date, sync state and telemetry, in a fixed-width instrument aesthetic.
 
 Primary time source is Wi-Fi SNTP/NTP, with PCF85063 RTC / ESP32 system time
@@ -40,7 +40,7 @@ spec.
 
 `rlcd_time_scale_monitor_implementation_notes.md` covers hardware
 constraints, the single-face display layout, time-scale derivations
-(integer-only MJD-TAI / GPS week-SOW / ISO week), the graphics stack
+(integer-only MJD-TAI / GPS week-TOW / ISO week), the graphics stack
 decision (u8g2, no LVGL), firmware architecture and milestones.
 
 ## Status
