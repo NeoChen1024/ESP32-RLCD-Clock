@@ -13,13 +13,13 @@
  *   big time     : u8g2_font_inr42_mr   (42px, has ':' digits symbols)
  *   scale values : u8g2_font_courB18_tr (18px courier bold, full charset)
  *   labels/mono  : u8g2_font_7x13_tr
- *   top/bottom   : u8g2_font_5x8_tr
+ *   top/bottom   : u8g2_font_7x13_tr (11px, readable on 4.2" @119dpi)
  */
 
 #define FONT_BIG     u8g2_font_inr42_mr
 #define FONT_SCALE   u8g2_font_courB18_tr
 #define FONT_MONO    u8g2_font_7x13_tr
-#define FONT_SMALL   u8g2_font_5x8_tr
+#define FONT_SMALL   u8g2_font_7x13_tr
 
 #define LABEL_X  8
 #define VALUE_X  78
@@ -125,14 +125,14 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
     int tz = host_tz_offset_minutes();
     char buf[40];
 
-    /* ---- Top bar ---- */
+    /* ---- Top bar (7x13, baseline y=16) ---- */
     u8g2_SetFont(g, FONT_SMALL);
     fmt_local_date(m, tz, buf, sizeof buf);
-    u8g2_DrawStr(g, 4, 14, buf);
+    u8g2_DrawStr(g, 4, 16, buf);
 
     char topbar_right[40];
     snprintf(topbar_right, sizeof topbar_right, "[wifi] %s", sync_label(m->sync));
-    draw_str_right(g, RIGHT_X, 14, topbar_right);
+    draw_str_right(g, RIGHT_X, 16, topbar_right);
 
     /* ---- Main time (big, centered) ---- */
     u8g2_SetFont(g, FONT_BIG);
@@ -189,17 +189,17 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
              TAI_MINUS_UTC_SECONDS - GPS_MINUS_UTC_SECONDS);
     draw_str_right(g, RIGHT_X, y, buf);
 
-    /* ---- Telemetry (bottom) ---- */
-    u8g2_DrawHLine(g, 8, 268, DISP_W - 16);
+    /* ---- Telemetry (bottom, 7x13 at 15px line pitch) ---- */
+    u8g2_DrawHLine(g, 8, 266, DISP_W - 16);
     u8g2_SetFont(g, FONT_SMALL);
     snprintf(buf, sizeof buf, "[tmp] +%.1fC   [rh] %.0f%%   [bat] %.2fV",
              m->temp_c, m->rh_pct, m->batt_v);
-    u8g2_DrawStr(g, 4, 284, buf);
+    u8g2_DrawStr(g, 4, 282, buf);
 
     char tel2[48];
     snprintf(tel2, sizeof tel2, "ntp +%lus   wifi %d dBm",
              (unsigned long)m->ntp_age_s, m->wifi_rssi_dbm);
-    u8g2_DrawStr(g, 4, 296, tel2);
+    u8g2_DrawStr(g, 4, 297, tel2);
 }
 
 void render_face(u8g2_t *g, const clock_model_t *m)

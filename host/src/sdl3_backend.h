@@ -35,4 +35,7 @@ bool sdl3_backend_pump_events(void);
 /* Export the current visible framebuffer to a PBM file. */
 void sdl3_backend_save_pbm(const char *path);
 
+/* Export the current visible framebuffer to a PNG file. */
+void sdl3_backend_save_png(const char *path);
+
 #endif

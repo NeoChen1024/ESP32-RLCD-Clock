@@ -14,15 +14,18 @@ int main(int argc, char **argv)
 {
     int scale = 3;
     const char *pbm_path = NULL;
+    const char *png_path = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--scale") == 0 && i + 1 < argc) {
             scale = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--pbm") == 0 && i + 1 < argc) {
             pbm_path = argv[++i];
+        } else if (strcmp(argv[i], "--png") == 0 && i + 1 < argc) {
+            png_path = argv[++i];
         }
     }
 
-    if (pbm_path) {
+    if (pbm_path || png_path) {
         /* Headless: render one frame and save, no SDL window. */
         u8g2_t u8g2;
         sdl3_backend_setup_u8g2(&u8g2);
@@ -32,7 +35,8 @@ int main(int argc, char **argv)
         time_model_now(&model);
         render_face(&u8g2, &model);
         u8g2_SendBuffer(&u8g2);
-        sdl3_backend_save_pbm(pbm_path);
+        if (pbm_path) sdl3_backend_save_pbm(pbm_path);
+        if (png_path) sdl3_backend_save_png(png_path);
         return 0;
     }
 

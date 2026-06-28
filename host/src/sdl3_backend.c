@@ -3,6 +3,7 @@
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static SDL_Window   *g_win = NULL;
@@ -218,4 +219,41 @@ void sdl3_backend_save_pbm(const char *path)
     }
     fclose(f);
     printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
+}
+
+/* ---------------------------------------------------------------------- */
+/* PNG export (uses SDL_SavePNG, no extra dependency)                      */
+/* ---------------------------------------------------------------------- */
+
+void sdl3_backend_save_png(const char *path)
+{
+    const uint8_t *buf = fb_ptr();
+    if (!buf) { fprintf(stderr, "no framebuffer\n"); return; }
+
+    /* Build an XRGB8888 surface from the 1-bit framebuffer so a vision-capable
+     * model / human can read the rendered output directly. */
+    const int pitch = DISP_W * 4;
+    uint32_t *px = (uint32_t *)malloc((size_t)DISP_W * DISP_H * 4);
+    if (!px) { fprintf(stderr, "png: out of memory\n"); return; }
+    const uint32_t ink   = 0xFF000000;  /* black, opaque */
+    const uint32_t paper = 0xFFFFFFFF;  /* white */
+    for (int y = 0; y < DISP_H; y++) {
+        for (int x = 0; x < DISP_W; x++) {
+            px[y * DISP_W + x] = fb_pixel(buf, x, y) ? ink : paper;
+        }
+    }
+    SDL_Surface *surf = SDL_CreateSurfaceFrom(DISP_W, DISP_H,
+                                              SDL_PIXELFORMAT_XRGB8888, px, pitch);
+    if (!surf) {
+        fprintf(stderr, "SDL_CreateSurfaceFrom failed: %s\n", SDL_GetError());
+        free(px);
+        return;
+    }
+    if (!SDL_SavePNG(surf, path)) {
+        fprintf(stderr, "SDL_SavePNG failed: %s\n", SDL_GetError());
+    } else {
+        printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
+    }
+    SDL_DestroySurface(surf);
+    free(px);
 }

@@ -31,12 +31,14 @@ cmake --build host/build -j
 host/build/rlcd_host                 # window, 3x scaling
 host/build/rlcd_host --scale 2       # 2x scaling
 host/build/rlcd_host --pbm out.pbm   # headless: render one frame, save PBM, exit
+host/build/rlcd_host --png out.png   # headless: render one frame, save PNG, exit
 ```
 
 Headless / no-display machines:
 
 ```sh
 SDL_VIDEODRIVER=dummy host/build/rlcd_host --pbm out.pbm
+SDL_VIDEODRIVER=dummy host/build/rlcd_host --png out.png
 ```
 
 ## Keyboard
