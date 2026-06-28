@@ -38,6 +38,21 @@ int main(void)
     if (tow != 55053) { printf("FAIL gps tow (got %lld)\n", (long long)tow); ok=0; }
     if (day != 61212) { printf("FAIL mjd day (got %lld)\n", (long long)day); ok=0; }
     if (!(y==2026 && mo==6 && d==21 && h==15 && mi==17 && s==15)) { printf("FAIL civil\n"); ok=0; }
+    if (wd != 6) { printf("FAIL weekday: 2026-06-21 is Sun (wd=6), got %d\n", wd); ok=0; }
+    if (iwd != 7) { printf("FAIL iso weekday: Sun=7, got %d\n", iwd); ok=0; }
+    if (iy != 2026 || iw != 25) { printf("FAIL iso year/week\n"); ok=0; }
+
+    /* epoch anchor: 1970-01-01 = Thursday */
+    memset(&m, 0, sizeof m);
+    m.unix_ms = 0;
+    m.time_trusted = true;
+    civil_fields(&m, 0, &y,&mo,&d,&wd,&h,&mi,&s);
+    printf("epoch: %04d-%02d-%02d %s %02d:%02d:%02d\n", y,mo,d,wdn[wd],h,mi,s);
+    if (!(y==1970 && mo==1 && d==1 && wd==3)) { printf("FAIL epoch weekday (expect THU)\n"); ok=0; }
+    iso_week_date(&m, &iy,&iw,&iwd);
+    printf("epoch ISO: %04d-W%02d-%d\n", iy,iw,iwd);
+    if (!(iy==1970 && iw==1 && iwd==4)) { printf("FAIL epoch ISO (expect 1970-W01-4)\n"); ok=0; }
+
     printf(ok ? "ALL OK\n" : "FAILURES\n");
     return ok ? 0 : 1;
 }

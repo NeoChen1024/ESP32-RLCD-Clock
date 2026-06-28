@@ -47,9 +47,9 @@ void gps_week_tow(const clock_model_t *m, int64_t *week, int64_t *tow)
 
 /* Convert unix seconds to Y/M/D/h/m/s for a given UTC offset (minutes).
  * Algorithm: Howard Hinnant, days_from_civil inverse. */
-static void civil_from_days(int64_t z, int *year, int *month, int *day, int *weekday)
+static void civil_from_days(int64_t days, int *year, int *month, int *day, int *weekday)
 {
-    z += 719468LL;                          /* days since 1970-01-01 to epoch of algorithm */
+    int64_t z = days + 719468LL;            /* days since 1970-01-01 to epoch of algorithm */
     int64_t era = (z >= 0 ? z : z - 146096LL) / 146097LL;
     unsigned doe = (unsigned)(z - era * 146097LL);       /* [0, 146096] */
     unsigned yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;  /* [0, 399] */
@@ -61,8 +61,8 @@ static void civil_from_days(int64_t z, int *year, int *month, int *day, int *wee
     *year  = (int)(y + (mon <= 2));
     *month = (int)mon;
     *day   = (int)d;
-    /* weekday: 1970-01-01 was Thursday = 4 (Mon=0). z is days since 1970-01-01. */
-    int wd = (int)((z - 719468LL) % 7);
+    /* weekday: 1970-01-01 was Thursday = 3 if Mon=0 */
+    int wd = (int)((days + 3) % 7);
     if (wd < 0) wd += 7;
     *weekday = wd;  /* 0=Mon .. 6=Sun */
 }
