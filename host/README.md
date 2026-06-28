@@ -16,6 +16,7 @@ host/
     sdl3_backend.{h,c} u8g2 display callback + SDL3 presenter (400x300 visible, 400x304 buffer)
   tests/
     test_time_model.c offline time-model checks (no SDL)
+  sample.png         single-face screenshot (--png output)
 ```
 
 ## Build
@@ -51,6 +52,8 @@ SDL_VIDEODRIVER=dummy host/build/rlcd_host --png out.png
 All time-scale telemetry is shown on a single face; there is no page
 switching. The main loop is capped at **15 Hz** (~66 ms/frame), sufficient
 for a 1 s-tick instrument readout.
+
+A rendered sample is in [`sample.png`](sample.png) (400x300, RGBA).
 
 ## Design notes
 
