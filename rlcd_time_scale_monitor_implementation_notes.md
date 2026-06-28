@@ -60,7 +60,7 @@ At 8×16 monospace this is roughly 50 columns × 18 rows — far more room than 
 
 ### 3.1 Core time scales
 
-Local civil time (ISO-8601), UTC (ISO-8601), ISO week date, MJD on TAI scale, GPS Week Number, GPS TOW, TAI−UTC offset, GPS−UTC offset, NTP sync age / trust state.
+Local civil time (ISO-8601), UTC (ISO-8601), ISO week date, MJD on TAI scale, GPS Week Number, GPS TOW, NTP sync age / trust state.
 
 ### 3.2 Leap second / TAI−UTC strategy
 
@@ -135,7 +135,6 @@ everything at once. Debug/config goes over the Serial console.
 │ ISO     2026-W25-7                     │   ISO week date
 │ MJDTAI  0061212.6374074                │   MJD on TAI scale
 │ GPS     W=2424 TOW=055053              │   GPS week / TOW
-│           dAT +37s  dUT +18s  dTG +19s │   TAI/UTC/GPS deltas
 │ ─────────────────────────────────────  │   separator
 │ [tmp] +28.4C  [rh] 61%  [bat] 3.91V   │   telemetry
 │ ntp +0s   wifi -57 dBm                 │   sync age / RSSI

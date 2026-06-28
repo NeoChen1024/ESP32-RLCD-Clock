@@ -180,15 +180,6 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
         draw_scale_placeholder(g, y, "GPS", "W---- TOW------");
     }
 
-    /* offset constants row: all three TAI/UTC/GPS deltas together */
-    y += 28;
-    u8g2_SetFont(g, FONT_MONO);
-    snprintf(buf, sizeof buf, "dAT +%ds   dUT +%ds   dTG +%ds",
-             TAI_MINUS_UTC_SECONDS,
-             GPS_MINUS_UTC_SECONDS,
-             TAI_MINUS_UTC_SECONDS - GPS_MINUS_UTC_SECONDS);
-    draw_str_right(g, RIGHT_X, y, buf);
-
     /* ---- Telemetry (bottom, 7x13 at 15px line pitch) ---- */
     u8g2_DrawHLine(g, 8, 266, DISP_W - 16);
     u8g2_SetFont(g, FONT_SMALL);
