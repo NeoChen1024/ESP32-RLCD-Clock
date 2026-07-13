@@ -8,8 +8,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(SDL3 CONFIG REQUIRED)
 
 # ---- u8g2 core (csrc is self-contained C; no SDL/hardware deps there) ----
-file(GLOB U8G2_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../u8g2/csrc/*.c")
-add_library(u8g2_core STATIC ${U8G2_SRCS})
+file(GLOB U8G2_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../u8g2/csrc/*.c")
+list(FILTER U8G2_SRCS EXCLUDE REGEX "/u8g2_fonts\\.c$")
+add_library(u8g2_core STATIC ${U8G2_SRCS} src/u8g2_selected_fonts.c)
 target_include_directories(u8g2_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../u8g2/csrc")
 
 # ---- host simulator ----

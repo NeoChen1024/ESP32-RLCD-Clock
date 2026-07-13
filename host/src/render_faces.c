@@ -1,5 +1,5 @@
 #include "render_faces.h"
-#include "sdl3_backend.h"   /* DISP_W / DISP_H */
+#include "display_geometry.h"
 #include "time_model.h"
 #include "u8g2.h"
 
@@ -143,7 +143,7 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
     /* tz offset + UTC time under the big time (inr42 has a 21px descender,
      * so the big time reaches ~y91; place this line below it) */
     u8g2_SetFont(g, FONT_MONO);
-    char tzbuf[8]; fmt_tz_str(tz, tzbuf, sizeof tzbuf);
+    char tzbuf[16]; fmt_tz_str(tz, tzbuf, sizeof tzbuf);
     char utcbuf[16]; fmt_utc_hms(m, utcbuf, sizeof utcbuf);
     snprintf(buf, sizeof buf, "%s   UTC %s", tzbuf, utcbuf);
     int uw = u8g2_GetStrWidth(g, buf);

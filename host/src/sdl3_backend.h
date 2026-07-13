@@ -12,10 +12,6 @@
  * to 400x304 (38 tile rows) because 300 is not a multiple of 8.
  */
 
-#define DISP_W 400
-#define DISP_H 300
-#define BUF_H  304          /* tile_height = 38, padded */
-
 /* Initialize SDL3 window/renderer/texture. Call once before u8g2 setup. */
 bool sdl3_backend_init(int scale);
 
@@ -29,13 +25,10 @@ void sdl3_backend_setup_u8g2(u8g2_t *u8g2);
  * u8g2 display callback on U8X8_MSG_DISPLAY_REFRESH (i.e. after SendBuffer). */
 void sdl3_present(void);
 
-/* Pump SDL events. Returns false if the window was closed / ESC pressed. */
-bool sdl3_backend_pump_events(void);
-
 /* Export the current visible framebuffer to a PBM file. */
-void sdl3_backend_save_pbm(const char *path);
+bool sdl3_backend_save_pbm(const char *path);
 
 /* Export the current visible framebuffer to a PNG file. */
-void sdl3_backend_save_png(const char *path);
+bool sdl3_backend_save_png(const char *path);
 
 #endif

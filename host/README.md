@@ -11,6 +11,7 @@ host/
   CMakeLists.txt
   src/
     main.c            SDL3 main loop, 15 Hz frame cap, keyboard input
+    display_geometry.h shared visible/buffer dimensions (no SDL dependency)
     time_model.{h,c}  integer time-scale derivations (MJD-TAI, GPS week/TOW, civil, ISO week)
     render_faces.{h,c} u8g2 draw calls for the single all-in-one face
     sdl3_backend.{h,c} u8g2 display callback + SDL3 presenter (400x300 visible, 400x304 buffer)
@@ -35,18 +36,17 @@ host/build/rlcd_host --pbm out.pbm   # headless: render one frame, save PBM, exi
 host/build/rlcd_host --png out.png   # headless: render one frame, save PNG, exit
 ```
 
-Headless / no-display machines:
-
-```sh
-SDL_VIDEODRIVER=dummy host/build/rlcd_host --pbm out.pbm
-SDL_VIDEODRIVER=dummy host/build/rlcd_host --png out.png
-```
+The PBM/PNG paths do not initialize the SDL video subsystem, so they work on
+no-display machines without setting `SDL_VIDEODRIVER`.
 
 ## Keyboard
 
 | Key | Action                          |
 |-----|---------------------------------|
 | S   | save `rlcd_screenshot.pbm`       |
+| N   | cycle sync/trust state            |
+| W   | toggle Wi-Fi-lost state           |
+| B   | toggle normal/low battery         |
 | Esc | quit                             |
 
 All time-scale telemetry is shown on a single face; there is no page
@@ -65,8 +65,11 @@ A rendered sample is in [`sample.png`](sample.png) (400x300, RGBA).
   is presented; layout code never hardcodes the byte stride.
 - **Integer-only time math.** No float/double in time-scale derivation — all
   paths use `int64` milliseconds/seconds to avoid readout jitter.
-- **Hardcoded offsets** (current/future only, no leap-second table):
-  `TAI = UTC + 37`, `GPS = UTC + 18`.
+- **Hardcoded current-era offsets** (no historical leap-second table and no
+  automatic update after a future leap second): `TAI = UTC + 37`,
+  `GPS = UTC + 18`.
+- **Selected host fonts.** The host build links only the three u8g2 fonts used
+  by the current face rather than the complete generated font catalogue.
 
 ## Test
 

@@ -13,15 +13,15 @@
  *   - GPS week/TOW    from unix_s
  *   - civil/UTC/ISO   from unix_ms
  *
- * Offsets are hardcoded (current and future display only; no leap-second
- * historical table):
+ * Offsets are hardcoded for the current era (no leap-second historical table
+ * and no automatic update after a future leap second):
  *   TAI = UTC + 37,  GPS = UTC + 18,  TAI = GPS + 19
  */
 
 #define TAI_MINUS_UTC_SECONDS 37
 #define GPS_MINUS_UTC_SECONDS 18
 #define UNIX_TO_GPS_EPOCH_S   315964800LL
-#define MJD_EPOCH_UNIX_MS     (40587LL * 86400000LL)   /* 1858-11-17 in unix ms (TAI) */
+#define MJD_EPOCH_UNIX_MS     (40587LL * 86400000LL)   /* MJD at the Unix epoch, in ms */
 
 /* Sync / trust state. Host simulator always starts NTP_OK. */
 typedef enum {

@@ -95,6 +95,18 @@ static int day_of_year(int year, int month, int day)
 
 static int iso_weekday_mon1(int weekday0) { return weekday0 + 1; }
 
+static int is_leap_year(int year)
+{
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+/* An ISO year has 53 weeks iff 1 January is Thursday, or Wednesday in a
+ * leap year. jan1_iwd uses the ISO weekday convention (Mon=1..Sun=7). */
+static int iso_weeks_in_year(int year, int jan1_iwd)
+{
+    return jan1_iwd == 4 || (jan1_iwd == 3 && is_leap_year(year)) ? 53 : 52;
+}
+
 void iso_week_date(const clock_model_t *m, int *iso_year, int *iso_week, int *iso_weekday)
 {
     /* Use UTC date for ISO week to stay scale-consistent. */
@@ -105,30 +117,18 @@ void iso_week_date(const clock_model_t *m, int *iso_year, int *iso_week, int *is
     int doy  = day_of_year(y, mo, d);
     int iwd  = iso_weekday_mon1(wd);          /* 1..7, Mon=1 */
     int week = (doy - iwd + 10) / 7;
+    int jan1_iwd = ((iwd - 1 - ((doy - 1) % 7) + 7) % 7) + 1;
 
     if (week < 1) {
         /* belongs to previous year's last week */
-        *iso_year = y - 1;
-        /* last week of prev year: Dec 28 always in last week */
         int py = y - 1;
-        int leap = (py%4==0 && py%100!=0) || (py%400==0);
-        int days_in_year = leap ? 366 : 365;
-        /* weekday of Dec 31 of prev year */
-        int py_doy_dec31 = days_in_year;
-        int py_wd_dec31 = (iwd + (days_in_year - doy)) % 7;
-        if (py_wd_dec31 == 0) py_wd_dec31 = 7;
-        *iso_week = (py_doy_dec31 - py_wd_dec31 + 10) / 7;
-    } else if (week > 52) {
-        /* might spill into next year's week 1 */
-        int leap = (y%4==0 && y%100!=0) || (y%400==0);
-        int days_in_year = leap ? 366 : 365;
-        if (days_in_year - doy < 4 - iwd) {
-            *iso_year = y + 1;
-            *iso_week = 1;
-        } else {
-            *iso_year = y;
-            *iso_week = week;
-        }
+        int py_days = is_leap_year(py) ? 366 : 365;
+        int py_jan1_iwd = ((jan1_iwd - 1 - (py_days % 7) + 7) % 7) + 1;
+        *iso_year = py;
+        *iso_week = iso_weeks_in_year(py, py_jan1_iwd);
+    } else if (week > iso_weeks_in_year(y, jan1_iwd)) {
+        *iso_year = y + 1;
+        *iso_week = 1;
     } else {
         *iso_year = y;
         *iso_week = week;

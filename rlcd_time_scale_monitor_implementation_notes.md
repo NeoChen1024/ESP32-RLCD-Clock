@@ -64,7 +64,9 @@ Local civil time (ISO-8601), UTC (ISO-8601), ISO week date, MJD on TAI scale, GP
 
 ### 3.2 Leap second / TAI−UTC strategy
 
-Hardcode current offsets; no leap-second table (current and future display only):
+Hardcode current-era offsets. There is no historical leap-second table and no
+automatic update after a future leap second, so these constants remain valid
+only while TAI−UTC is 37 seconds:
 
 ```c
 #define TAI_MINUS_UTC_SECONDS 37
@@ -207,13 +209,20 @@ The host does not emulate the full ST7305 command set — only the final 400×30
 
 ### 7.3 First-version simulator goals
 
-400×300 landscape window, integer scaling, 1-bit framebuffer preview, fake ClockModel injection, keyboard page/state switching, screenshot/PBM export.
+400×300 landscape window, integer scaling, 1-bit framebuffer preview, host
+ClockModel state overrides, keyboard state switching, and PNG/PBM export.
 
-Keyboard: `1/2/3` page, `D` dense/large toggle, `N` cycle sync state, `W` Wi-Fi, `B` battery, `S` screenshot, `Q` quit.
+Keyboard: `N` cycles sync/trust state, `W` toggles Wi-Fi loss, `B` toggles low
+battery, `S` saves a PBM screenshot, and `Esc` quits. There is no page-switching
+binding because the current design uses one face.
 
 ### 7.4 Test states
 
-normal / holdover / unsync / lowbat / old NTP age / MJD fractional rollover / GPS TOW rollover / GPS week rollover / UTC-local date crossing / ISO week across year boundary / status text overflow / temperature and humidity edge values.
+Interactive controls currently cover normal / holdover / unsync / Wi-Fi lost /
+low battery. Offline time-model tests cover MJD fractional output, GPS week/TOW,
+civil time, weekdays, and ISO week across both 52- and 53-week year boundaries.
+Future deterministic screenshot scenarios should add old NTP age, MJD/GPS
+rollovers, UTC-local date crossing, status overflow, and sensor edge values.
 
 ### 7.5 Framebuffer padding
 
@@ -270,10 +279,11 @@ rlcd-time-scale-monitor/
   docs/                 design.md, time-scale-notes.md, display-backend.md
   assets/fonts/         *.bdf
   generated/            u8g2_font_*.c
-  src/app/              clock_model.h, time_model.{h,cpp}, render_faces.{h,cpp},
-                        face_main.cpp, face_scales.cpp, face_system.cpp,
-                        serial_console.{h,cpp}
-  src/backend/sdl3/     main_sdl3.cpp, u8g2_sdl3_backend.{h,cpp}
+  host/src/             main.c, time_model.{h,c}, render_faces.{h,c},
+                        display_geometry.h, sdl3_backend.{h,c},
+                        u8g2_selected_fonts.c
+  host/tests/           test_time_model.c
+  src/app/              future portable firmware application and Serial CLI
   src/backend/esp32/    main_arduino.cpp, st7305_backend.{h,cpp},
                         wifi_ntp.{h,cpp}, pcf85063.{h,cpp}, shtc3.{h,cpp}, battery.{h,cpp}
   tools/                build_fonts.sh, dump_screenshot.py

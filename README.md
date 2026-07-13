@@ -31,6 +31,7 @@ ctest --test-dir host/build --output-on-failure   # time-model tests
 host/build/rlcd_host                              # window (15 Hz cap, nearest-neighbor)
 host/build/rlcd_host --scale 2
 host/build/rlcd_host --pbm out.pbm                # headless single-frame dump
+host/build/rlcd_host --png out.png
 ```
 
 See `host/README.md` for simulator details and the design notes for the full
@@ -46,6 +47,7 @@ decision (u8g2, no LVGL), firmware architecture and milestones.
 ## Status
 
 Host simulator: working — single face renders all time-scale fields from the
-system clock, headless PBM export, 15 Hz frame cap, HiDPI-aware (nearest
-scaling, aspect-preserving). ESP32/ST7305 target backend and SD config/alarm
+system clock, sync/Wi-Fi/battery states can be exercised from the keyboard,
+headless PBM/PNG export, 15 Hz frame cap, HiDPI-aware nearest scaling and
+aspect-preserving presentation. ESP32/ST7305 target backend and SD config/alarm
 storage are not yet implemented.

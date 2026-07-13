@@ -1,4 +1,5 @@
 #include "sdl3_backend.h"
+#include "display_geometry.h"
 #include "u8g2.h"
 
 #include <SDL3/SDL.h>
@@ -98,6 +99,7 @@ bool sdl3_backend_init(int scale)
             DISP_W * g_scale, DISP_H * g_scale,
             SDL_WINDOW_HIGH_PIXEL_DENSITY, &g_win, &g_ren)) {
         fprintf(stderr, "SDL_CreateWindowAndRenderer failed: %s\n", SDL_GetError());
+        SDL_Quit();
         return false;
     }
     SDL_SetRenderVSync(g_ren, 1);
@@ -105,6 +107,11 @@ bool sdl3_backend_init(int scale)
                               SDL_TEXTUREACCESS_STREAMING, DISP_W, DISP_H);
     if (!g_tex) {
         fprintf(stderr, "SDL_CreateTexture failed: %s\n", SDL_GetError());
+        SDL_DestroyRenderer(g_ren);
+        SDL_DestroyWindow(g_win);
+        g_ren = NULL;
+        g_win = NULL;
+        SDL_Quit();
         return false;
     }
     /* Nearest-neighbor so the 1-bit framebuffer stays crisp on HiDPI. */
@@ -178,21 +185,14 @@ void sdl3_present(void)
     SDL_RenderPresent(g_ren);
 }
 
-bool sdl3_backend_pump_events(void)
-{
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_EVENT_QUIT) return false;
-        if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) return false;
-    }
-    return true;
-}
-
 void sdl3_backend_shutdown(void)
 {
     if (g_tex) SDL_DestroyTexture(g_tex);
     if (g_ren) SDL_DestroyRenderer(g_ren);
     if (g_win) SDL_DestroyWindow(g_win);
+    g_tex = NULL;
+    g_ren = NULL;
+    g_win = NULL;
     SDL_Quit();
 }
 
@@ -200,13 +200,17 @@ void sdl3_backend_shutdown(void)
 /* PBM export                                                              */
 /* ---------------------------------------------------------------------- */
 
-void sdl3_backend_save_pbm(const char *path)
+bool sdl3_backend_save_pbm(const char *path)
 {
     const uint8_t *buf = fb_ptr();
-    if (!buf) { fprintf(stderr, "no framebuffer\n"); return; }
+    if (!buf) { fprintf(stderr, "no framebuffer\n"); return false; }
     FILE *f = fopen(path, "wb");
-    if (!f) { perror(path); return; }
-    fprintf(f, "P4\n%d %d\n", DISP_W, DISP_H);
+    if (!f) { perror(path); return false; }
+    if (fprintf(f, "P4\n%d %d\n", DISP_W, DISP_H) < 0) {
+        fprintf(stderr, "failed writing %s\n", path);
+        fclose(f);
+        return false;
+    }
     /* PBM: 1 = black(ink), 0 = white; MSB-first, row-major. */
     for (int y = 0; y < DISP_H; y++) {
         for (int x = 0; x < DISP_W; x += 8) {
@@ -214,27 +218,35 @@ void sdl3_backend_save_pbm(const char *path)
             for (int i = 0; i < 8; i++) {
                 if (fb_pixel(buf, x + i, y)) b |= (uint8_t)(1 << (7 - i));
             }
-            fputc(b, f);
+            if (fputc(b, f) == EOF) {
+                fprintf(stderr, "failed writing %s\n", path);
+                fclose(f);
+                return false;
+            }
         }
     }
-    fclose(f);
+    if (fclose(f) != 0) {
+        perror(path);
+        return false;
+    }
     printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
+    return true;
 }
 
 /* ---------------------------------------------------------------------- */
 /* PNG export (uses SDL_SavePNG, no extra dependency)                      */
 /* ---------------------------------------------------------------------- */
 
-void sdl3_backend_save_png(const char *path)
+bool sdl3_backend_save_png(const char *path)
 {
     const uint8_t *buf = fb_ptr();
-    if (!buf) { fprintf(stderr, "no framebuffer\n"); return; }
+    if (!buf) { fprintf(stderr, "no framebuffer\n"); return false; }
 
     /* Build an XRGB8888 surface from the 1-bit framebuffer so a vision-capable
      * model / human can read the rendered output directly. */
     const int pitch = DISP_W * 4;
     uint32_t *px = (uint32_t *)malloc((size_t)DISP_W * DISP_H * 4);
-    if (!px) { fprintf(stderr, "png: out of memory\n"); return; }
+    if (!px) { fprintf(stderr, "png: out of memory\n"); return false; }
     const uint32_t ink   = 0xFF000000;  /* black, opaque */
     const uint32_t paper = 0xFFFFFFFF;  /* white */
     for (int y = 0; y < DISP_H; y++) {
@@ -247,13 +259,15 @@ void sdl3_backend_save_png(const char *path)
     if (!surf) {
         fprintf(stderr, "SDL_CreateSurfaceFrom failed: %s\n", SDL_GetError());
         free(px);
-        return;
+        return false;
     }
-    if (!SDL_SavePNG(surf, path)) {
+    bool ok = SDL_SavePNG(surf, path);
+    if (!ok) {
         fprintf(stderr, "SDL_SavePNG failed: %s\n", SDL_GetError());
     } else {
         printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
     }
     SDL_DestroySurface(surf);
     free(px);
+    return ok;
 }

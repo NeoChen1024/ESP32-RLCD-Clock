@@ -2,6 +2,20 @@
 #include <stdio.h>
 #include <string.h>
 
+static int check_iso(clock_model_t *m, int64_t unix_s,
+                     int expected_year, int expected_week, int expected_weekday)
+{
+    int year, week, weekday;
+    m->unix_ms = unix_s * 1000LL;
+    iso_week_date(m, &year, &week, &weekday);
+    if (year == expected_year && week == expected_week && weekday == expected_weekday)
+        return 1;
+    printf("FAIL ISO for unix %lld: got %04d-W%02d-%d, expected %04d-W%02d-%d\n",
+           (long long)unix_s, year, week, weekday,
+           expected_year, expected_week, expected_weekday);
+    return 0;
+}
+
 int main(void)
 {
     /* Known instant: 2026-06-21T15:17:15Z = unix 1782055035 s.
@@ -37,6 +51,7 @@ int main(void)
     if (w != 2424) { printf("FAIL gps week\n"); ok=0; }
     if (tow != 55053) { printf("FAIL gps tow (got %lld)\n", (long long)tow); ok=0; }
     if (day != 61212) { printf("FAIL mjd day (got %lld)\n", (long long)day); ok=0; }
+    if (frac != 6374074) { printf("FAIL mjd fraction (got %07lld)\n", (long long)frac); ok=0; }
     if (!(y==2026 && mo==6 && d==21 && h==15 && mi==17 && s==15)) { printf("FAIL civil\n"); ok=0; }
     if (wd != 6) { printf("FAIL weekday: 2026-06-21 is Sun (wd=6), got %d\n", wd); ok=0; }
     if (iwd != 7) { printf("FAIL iso weekday: Sun=7, got %d\n", iwd); ok=0; }
@@ -52,6 +67,14 @@ int main(void)
     iso_week_date(&m, &iy,&iw,&iwd);
     printf("epoch ISO: %04d-W%02d-%d\n", iy,iw,iwd);
     if (!(iy==1970 && iw==1 && iwd==4)) { printf("FAIL epoch ISO (expect 1970-W01-4)\n"); ok=0; }
+
+    /* ISO week-year boundaries, including both 52- and 53-week years. */
+    ok &= check_iso(&m, 1451606400LL, 2015, 53, 5); /* 2016-01-01 */
+    ok &= check_iso(&m, 1483228800LL, 2016, 52, 7); /* 2017-01-01 */
+    ok &= check_iso(&m, 1546214400LL, 2019,  1, 1); /* 2018-12-31 */
+    ok &= check_iso(&m, 1609459200LL, 2020, 53, 5); /* 2021-01-01 */
+    ok &= check_iso(&m, 1640995200LL, 2021, 52, 6); /* 2022-01-01 */
+    ok &= check_iso(&m, 1798761600LL, 2026, 53, 5); /* 2027-01-01 */
 
     printf(ok ? "ALL OK\n" : "FAILURES\n");
     return ok ? 0 : 1;
