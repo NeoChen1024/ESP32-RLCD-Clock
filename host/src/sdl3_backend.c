@@ -1,5 +1,6 @@
 #include "sdl3_backend.h"
 #include "display_geometry.h"
+#include "frame_export.h"
 #include "u8g2.h"
 
 #include <SDL3/SDL.h>
@@ -206,31 +207,24 @@ bool sdl3_backend_save_pbm(const char *path)
     if (!buf) { fprintf(stderr, "no framebuffer\n"); return false; }
     FILE *f = fopen(path, "wb");
     if (!f) { perror(path); return false; }
-    if (fprintf(f, "P4\n%d %d\n", DISP_W, DISP_H) < 0) {
-        fprintf(stderr, "failed writing %s\n", path);
-        fclose(f);
-        return false;
-    }
-    /* PBM: 1 = black(ink), 0 = white; MSB-first, row-major. */
-    for (int y = 0; y < DISP_H; y++) {
-        for (int x = 0; x < DISP_W; x += 8) {
-            uint8_t b = 0;
-            for (int i = 0; i < 8; i++) {
-                if (fb_pixel(buf, x + i, y)) b |= (uint8_t)(1 << (7 - i));
-            }
-            if (fputc(b, f) == EOF) {
-                fprintf(stderr, "failed writing %s\n", path);
-                fclose(f);
-                return false;
-            }
-        }
-    }
-    if (fclose(f) != 0) {
-        perror(path);
-        return false;
-    }
-    printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
-    return true;
+    bool ok = frame_export_pbm(f, buf, DISP_W, DISP_H);
+    if (fclose(f) != 0) ok = false;
+    if (!ok) fprintf(stderr, "failed writing %s\n", path);
+    else     printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
+    return ok;
+}
+
+bool sdl3_backend_save_bmp(const char *path)
+{
+    const uint8_t *buf = fb_ptr();
+    if (!buf) { fprintf(stderr, "no framebuffer\n"); return false; }
+    FILE *f = fopen(path, "wb");
+    if (!f) { perror(path); return false; }
+    bool ok = frame_export_bmp(f, buf, DISP_W, DISP_H);
+    if (fclose(f) != 0) ok = false;
+    if (!ok) fprintf(stderr, "failed writing %s\n", path);
+    else     printf("saved %s (%dx%d)\n", path, DISP_W, DISP_H);
+    return ok;
 }
 
 /* ---------------------------------------------------------------------- */

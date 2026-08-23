@@ -22,7 +22,7 @@ typedef struct {
 static void usage(FILE *out, const char *program)
 {
     fprintf(out,
-            "Usage: %s [--scale N] [--pbm PATH] [--png PATH]\n"
+            "Usage: %s [--scale N] [--pbm PATH] [--bmp PATH] [--png PATH]\n"
             "       %s --help\n",
             program, program);
 }
@@ -68,6 +68,7 @@ int main(int argc, char **argv)
 {
     int scale = 3;
     const char *pbm_path = NULL;
+    const char *bmp_path = NULL;
     const char *png_path = NULL;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0) {
@@ -84,6 +85,12 @@ int main(int argc, char **argv)
                 return 2;
             }
             pbm_path = argv[++i];
+        } else if (strcmp(argv[i], "--bmp") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--bmp expects a path\n");
+                return 2;
+            }
+            bmp_path = argv[++i];
         } else if (strcmp(argv[i], "--png") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "--png expects a path\n");
@@ -97,7 +104,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (pbm_path || png_path) {
+    if (pbm_path || bmp_path || png_path) {
         /* Headless: render one frame and save, no SDL window. */
         u8g2_t u8g2;
         sdl3_backend_setup_u8g2(&u8g2);
@@ -109,6 +116,7 @@ int main(int argc, char **argv)
         u8g2_SendBuffer(&u8g2);
         bool ok = true;
         if (pbm_path) ok &= sdl3_backend_save_pbm(pbm_path);
+        if (bmp_path) ok &= sdl3_backend_save_bmp(bmp_path);
         if (png_path) ok &= sdl3_backend_save_png(png_path);
         return ok ? 0 : 1;
     }

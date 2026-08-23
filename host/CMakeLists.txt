@@ -16,9 +16,11 @@ target_include_directories(u8g2_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../u8g2
 # ---- host simulator ----
 add_executable(rlcd_host
   src/main.c
+  src/host_time.c
   src/time_model.c
   src/render_faces.c
   src/sdl3_backend.c
+  src/frame_export.c
 )
 target_include_directories(rlcd_host PRIVATE src)
 target_link_libraries(rlcd_host PRIVATE u8g2_core SDL3::SDL3)
@@ -26,6 +28,12 @@ target_link_libraries(rlcd_host PRIVATE u8g2_core SDL3::SDL3)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   target_compile_options(rlcd_host PRIVATE -O2)
 endif()
+
+# ---- frame-export unit test (no SDL needed) ----
+add_executable(test_frame_export tests/test_frame_export.c src/frame_export.c)
+target_include_directories(test_frame_export PRIVATE src)
+enable_testing()
+add_test(NAME frame_export COMMAND test_frame_export)
 
 # ---- time-model unit test (no SDL needed) ----
 add_executable(test_time_model tests/test_time_model.c src/time_model.c)

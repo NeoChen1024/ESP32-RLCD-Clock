@@ -1,11 +1,12 @@
-#ifndef RLCD_HOST_TIME_MODEL_H
-#define RLCD_HOST_TIME_MODEL_H
+#ifndef RLCD_TIME_MODEL_H
+#define RLCD_TIME_MODEL_H
 
 #include <stdint.h>
 #include <stdbool.h>
 
 /*
- * Time-scale model.
+ * Time-scale model — shared verbatim between the host simulator and the
+ * ESP32 target (compiled from this file by both builds).
  *
  * All time-scale derivations use integer arithmetic only (no float/double)
  * to avoid readout jitter. Three independent paths from unix epoch:
@@ -43,7 +44,9 @@ typedef struct {
     float    batt_v;
 } clock_model_t;
 
-/* Fill model from the system clock (host: always trusted / NTP_OK). */
+/* Fill model from the platform's time source + state. Implemented per
+ * platform: host = system clock (always trusted/NTP_OK); target = SNTP time
+ * + Wi-Fi/sync state. */
 void time_model_now(clock_model_t *m);
 
 /* ---- Time-scale field extractors (from m->unix_ms) ---- */
@@ -62,7 +65,8 @@ void civil_fields(const clock_model_t *m, int tz_offset_min,
 /* ISO week date: year, week (1..53), weekday (1..7, Mon=1). */
 void iso_week_date(const clock_model_t *m, int *iso_year, int *iso_week, int *iso_weekday);
 
-/* Current TZ offset in minutes from the host system local time. */
-int host_tz_offset_minutes(void);
+/* Current TZ offset in minutes east of UTC. Implemented per platform:
+ * host = system local time; target = CLI-configurable (default UTC+8). */
+int tz_offset_minutes(void);
 
 #endif

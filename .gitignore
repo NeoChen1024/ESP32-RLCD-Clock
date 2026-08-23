@@ -3,6 +3,11 @@ host/build/
 build/
 compile_commands.json
 
+# ESP-IDF generated config (sdkconfig.defaults is the source of truth)
+sdkconfig
+firmware/sdkconfig
+sdkconfig.old
+
 # clangd / LSP cache
 .cache/
 host/.cache/

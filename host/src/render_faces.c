@@ -122,7 +122,7 @@ static void draw_scale_placeholder(u8g2_t *g, int y, const char *label, const ch
 
 static void render_face_single(u8g2_t *g, const clock_model_t *m)
 {
-    int tz = host_tz_offset_minutes();
+    int tz = tz_offset_minutes();
     char buf[40];
 
     /* ---- Top bar (7x13, baseline y=16) ---- */

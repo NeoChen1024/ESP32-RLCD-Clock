@@ -28,6 +28,9 @@ void sdl3_present(void);
 /* Export the current visible framebuffer to a PBM file. */
 bool sdl3_backend_save_pbm(const char *path);
 
+/* Export the current visible framebuffer to a 1-bit BMP file. */
+bool sdl3_backend_save_bmp(const char *path);
+
 /* Export the current visible framebuffer to a PNG file. */
 bool sdl3_backend_save_png(const char *path);
 
