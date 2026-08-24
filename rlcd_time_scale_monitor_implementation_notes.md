@@ -338,8 +338,52 @@ Design rules:
 - **Shared encoder**: `frame_export.{h,c}` (pure C, no SDL/hardware deps) converts the u8g2 vertical_top_lsb buffer to P4 PBM and 1-bit BMP, byte-for-byte identical on host and target. PBM: P4, `400 300`, MSB-first, row-major, 1 = ink. BMP: 1-bit, top-down (`biHeight` negative), palette {white, black}, rows padded to 4 bytes.
 - **Fresh frame**: the handler locks the display framebuffer, renders the face, encodes, unlocks — never exposes a half-drawn frame.
 - **Layout translation on target**: the ST7305's u8g2 buffer lives in the panel's native orientation (304-wide × 400-tall, U8G2_R1 rotation), while the face is drawn in logical 400×300 landscape. `snapshot.c` re-maps the physical buffer back to the host's 400×300 layout before encoding, so target exports stay byte-comparable with the host.
-- **Read-only by construction**: no query params, no config mutation, no auth. It is a debug surface on the user's LAN, nothing more — do not extend it into a control/API endpoint (config stays Serial-only).
+- **Read-only by construction**: no query params, no config mutation, no auth. It is a debug surface on the user's LAN, nothing more — do not extend it into a control/API endpoint. Config upload is a separate, SD-backed endpoint (§8.6), not a query-param on this one.
 - Serves only when Wi-Fi is up (STA); not required for instrument function.
+
+### 8.6 SD config upload (milestone 8)
+
+How config files (TZ offset, TAI/GPS offset overrides, alarm times) and alarm
+sound samples get onto the SD card, and how the JSON config format is
+iterated during alarm development.
+
+**Transport decision: REST `/fs/` API, not WebDAV.**
+
+- WebDAV's only real value is OS-native mounting (Windows Explorer "Map
+  network drive", macOS Finder, davfs2). The actual workflow here is
+  curl / Python: `curl -T file URL` is a plain PUT — WebDAV adds nothing
+  for it, only PROPFIND XML, LOCK semantics and RFC 4918 compliance cost.
+- ESP-IDF would support WebDAV if we ever wanted it: `http_parser` (bundled
+  component) already parses PROPFIND/LOCK/MKCOL/COPY/MOVE/UNLOCK/etc.,
+  `esp_http_server` has an `HTTP_ANY` wildcard method for routing them, and
+  `esp_vfs_fat_sdmmc_mount()` gives POSIX file I/O on the card. Platform is
+  not the obstacle — the protocol's own verbosity is. So a future WebDAV
+  layer can be added on top without changing the architecture.
+
+API (all under `/fs/`):
+
+| Method   | Path               | Effect                                            |
+| -------- | ------------------ | ------------------------------------------------- |
+| `PUT`    | `/fs/config.json`  | Upload/overwrite a config file (raw body → FATFS) |
+| `GET`    | `/fs/config.json`  | Download a file (verify writes, backup)           |
+| `DELETE` | `/fs/config.json`  | Remove a file                                     |
+| `GET`    | `/fs/`             | List files (JSON)                                 |
+
+Workflow: edit locally → `curl -T config.json http://<ip>/fs/config.json`
+(or a Python helper) → device re-reads → observe alarm behavior → GET back to
+verify. Fixed whitelist of known filenames (`config.json`, `alarms.json`,
+`sounds/*.wav`), no arbitrary URL path parsing → no path traversal, and no
+need for an auth scheme beyond the existing LAN-debug trust boundary (§8.5).
+
+Implementation notes:
+
+- Upload is the inverse of the §8.5 fopencookie pattern: `httpd_req_recv()`
+  loop → write to the mounted FATFS file. No fopencookie needed for input.
+- Write to a temp file then rename for atomic replace, so a half-written
+  config can never be parsed as valid.
+- Milestone 8 also brings the SD mount (`esp_vfs_fat_sdmmc_mount`) and the
+  config parser; the endpoint itself is deliberately dumb (file in / file
+  out), all semantics live in the parser.
 
 ---
 
@@ -411,7 +455,7 @@ flashed to the RLCD 4.2 board and confirmed over CLI/HTTP/panel.
 5. ✅ **ESP32 bring-up** — ESP-IDF v6.0.2 app, u8g2 as IDF component, ST7305 SPI init/flush (vendor backend), 1 Hz display task, CLI, HTTP debug snapshot. **Verified on hardware.**
 6. ⚠️ **Time sync and RTC** — Wi-Fi/SNTP sync, NTP age, DHCP option-42 + manual + fallback servers all verified; PCF85063 RTC read/write, boot-unsafe/RTC-holdover states NOT built (host simulates via keyboard only)
 7. ✅ **Sensors and telemetry** — SHTC3 (I2C, CRC-8 verified) + battery ADC (curve-fitted, divider ×3) + real Wi-Fi RSSI. **Verified on hardware** (31.7 °C / 53 %RH / 4.06 V / −43 dBm).
-8. ⬜ **SD storage** — mount, read config file (TZ / offsets / alarm times), load alarm sound effects
+8. ⬜ **SD storage** — mount (`esp_vfs_fat_sdmmc_mount`), read config file (TZ / offsets / alarm times), load alarm sound effects; REST `/fs/` upload API (§8.6): PUT/GET/DELETE + list for JSON config iteration via curl/Python. Transport decided: plain HTTP PUT, not WebDAV (see §8.6).
 9. ⬜ **Polish** — low battery / Wi-Fi lost state, screenshot regression, power behavior tuning
 
 Also done ahead of plan: **HTTP debug snapshot** (§8.5) shipped with milestone 5,
@@ -424,9 +468,9 @@ and the full host UI is ported to the target (§10) with TZ configurable via CLI
 
 Not building: LVGL GUI, voice recognition, Bluetooth UI, precision RTC calibration, leap-second historical table, complex on-device menu.
 
-**SD card role**: store a config file (TZ offset, TAI/GPS offset overrides, alarm times) and alarm sound-effect samples. Not a general log sink in the first version.
+**SD card role**: store a config file (TZ offset, TAI/GPS offset overrides, alarm times) and alarm sound-effect samples. Not a general log sink in the first version. Config files are pushed over the LAN via the REST `/fs/` upload endpoint (§8.6) — plain HTTP PUT from curl/Python, deliberately not WebDAV.
 
-Future extensions: RTC drift measurement, Wi-Fi captive config portal, web UI (the §8.5 read-only snapshot endpoint is a debug tool, not the start of a web UI), SD-based logging, ham radio page (poll solar conditions / HF propagation info).
+Future extensions: RTC drift measurement, Wi-Fi captive config portal, web UI (the §8.5 snapshot endpoint is a debug tool and the §8.6 `/fs/` endpoint is a config-transfer API — neither is the start of a web UI), SD-based logging, ham radio page (poll solar conditions / HF propagation info).
 
 Built ahead of the original plan: HTTP debug snapshot (§8.5), CLI-configurable
 TZ, DHCP option-42 NTP, and real SHTC3/battery telemetry — see milestone
@@ -449,7 +493,7 @@ Host preview    SDL3 backend presenting u8g2 framebuffer
 Target          ESP-IDF v6.0.2 + ST7305 SPI flush; HTTP debug snapshot (PBM/BMP)
 UI              Serial CLI (USB-Serial/JTAG): wifi / ntp / tz / sensor / http
 Asset format    stock u8g2 fonts (custom BDF pipeline not yet built)
-SD role         config file + alarm time / sound-effect storage  [not built]
+SD role         config file + alarm time / sound-effect storage; REST /fs/ upload (§8.6)  [not built]
 ```
 
 Core architectural principle: first write it as a portable 400×300 monochrome
