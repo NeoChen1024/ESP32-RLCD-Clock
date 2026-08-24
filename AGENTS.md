@@ -92,7 +92,8 @@ idf.py -p /dev/ttyACM1 build flash
   divider ×3). `sensor` CLI command reads both. Values flow into the model
   each frame; failed SHTC3 reads keep the last good value.
   Device RSSI is real (`esp_wifi_sta_get_ap_info`).
-- **NTP server selection**: manual `ntp server` override > DHCP option 42
+- **NTP server selection**: manual `ntp server` CLI override > SD config
+  JSON `ntp_server` key (milestone 8; not implemented yet) > DHCP option 42
   (CONFIG_LWIP_DHCP_GET_NTP_SRV) > pool.ntp.org fallback. Re-applied on every
   `IP_EVENT_STA_GOT_IP`. `ntp status` shows `server_name` (what we configured)
   vs `server_ip` (the address actually in use).

@@ -262,7 +262,7 @@ Two IDF-specific gotchas discovered during bring-up (see AGENTS.md):
 ```text
 display_task    1 Hz: render shared face → invert → ST7305 flush   [implemented]
 wifi_mgr        event-driven STA connect/disconnect; auto-reconnect  [implemented]
-sntp_mgr        esp_sntp with DHCP option-42 + manual + fallback     [implemented]
+sntp_mgr        esp_sntp; priority CLI > SD config > DHCP option-42 > pool [implemented]
 http_srv        esp_http_server: / /status /snapshot.pbm /snapshot.bmp [implemented]
 sensor frontend SHTC3 + battery ADC, read on each display frame     [implemented]
 CLI             linenoise REPL over USB-Serial/JTAG console          [implemented]
@@ -309,12 +309,15 @@ http status                              list debug endpoints
 help
 ```
 
-**NTP server selection** (priority order): manual `ntp server` override >
-DHCP option 42 (`CONFIG_LWIP_DHCP_GET_NTP_SRV`) > pool.ntp.org fallback.
+**NTP server selection** (priority order): manual `ntp server` CLI override >
+SD config JSON (milestone 8: `ntp_server` key) > DHCP option 42
+(`CONFIG_LWIP_DHCP_GET_NTP_SRV`) > pool.ntp.org fallback.
 `ntp status` shows `server_name` (configured) vs `server_ip` (address actually
 in use — lwIP stores DHCP servers as IPs). A watchdog reverts to the public
 pool if a DHCP-provided server fails to sync within ~18 s (a DHCP option-42
 address pointing at a host without an NTP daemon must not strand the clock).
+The SD-config layer only exists once milestone 8 lands; until then the order
+is CLI > DHCP option 42 > pool (as verified on hardware).
 
 **TZ**: offset is a CLI-set value (default UTC+8), not read from the host OS —
 see §8.1 (picolibc has no `tm_gmtoff`). Not persisted yet; SD config comes
@@ -343,9 +346,9 @@ Design rules:
 
 ### 8.6 SD config upload (milestone 8)
 
-How config files (TZ offset, TAI/GPS offset overrides, alarm times) and alarm
-sound samples get onto the SD card, and how the JSON config format is
-iterated during alarm development.
+How config files (TZ offset, TAI/GPS offset overrides, alarm times,
+`ntp_server`) and alarm sound samples get onto the SD card, and how the JSON
+config format is iterated during alarm development.
 
 **Transport decision: REST `/fs/` API, not WebDAV.**
 
@@ -455,18 +458,39 @@ flashed to the RLCD 4.2 board and confirmed over CLI/HTTP/panel.
 5. ✅ **ESP32 bring-up** — ESP-IDF v6.0.2 app, u8g2 as IDF component, ST7305 SPI init/flush (vendor backend), 1 Hz display task, CLI, HTTP debug snapshot. **Verified on hardware.**
 6. ⚠️ **Time sync and RTC** — Wi-Fi/SNTP sync, NTP age, DHCP option-42 + manual + fallback servers all verified; PCF85063 RTC read/write, boot-unsafe/RTC-holdover states NOT built (host simulates via keyboard only)
 7. ✅ **Sensors and telemetry** — SHTC3 (I2C, CRC-8 verified) + battery ADC (curve-fitted, divider ×3) + real Wi-Fi RSSI. **Verified on hardware** (31.7 °C / 53 %RH / 4.06 V / −43 dBm).
-8. ⬜ **SD storage** — mount (`esp_vfs_fat_sdmmc_mount`), read config file (TZ / offsets / alarm times), load alarm sound effects; REST `/fs/` upload API (§8.6): PUT/GET/DELETE + list for JSON config iteration via curl/Python. Transport decided: plain HTTP PUT, not WebDAV (see §8.6).
+8. ⬜ **SD storage** — mount (`esp_vfs_fat_sdmmc_mount`), read config file (TZ / offsets / alarm times / `ntp_server`), load alarm sound effects; REST `/fs/` upload API (§8.6): PUT/GET/DELETE + list for JSON config iteration via curl/Python. Transport decided: plain HTTP PUT, not WebDAV (see §8.6). SD `ntp_server` sits between the CLI override and DHCP option 42 in server selection (§8.4).
 9. ⬜ **Polish** — low battery / Wi-Fi lost state, screenshot regression, power behavior tuning
 
 Also done ahead of plan: **HTTP debug snapshot** (§8.5) shipped with milestone 5,
 and the full host UI is ported to the target (§10) with TZ configurable via CLI
 (§8.4).
 
+**Roadmap decisions** (recorded so they are not re-litigated later):
+
+- **Keep the SNTP client; do NOT move to a full NTP implementation or
+  xleave (RFC 7822).** The instrument only displays 1 Hz seconds and
+  minute/second alarms — SNTP's ±ms accuracy already exceeds the need by
+  3-4 orders of magnitude. Full RFC 5905 (clock filter, Marzullo
+  selection, clustering/combining, poll adaptation) has no portable
+  embedded implementation to reuse — lwIP's sntp.c is SNTP-only and not
+  extensible, so it would mean writing ~500-1000 lines of hard-to-verify
+  precision code. xleave additionally requires server-side support
+  (public pools and typical DHCP option-42 servers do not provide it —
+  it would mean running our own chrony), and even then its sub-ms
+  accuracy cannot materialize over Wi-Fi (802.11 contention/retry jitter
+  is ms-scale; no MAC-layer timestamping). If sub-ms time is ever
+  genuinely needed, the prerequisite is Ethernet + PTP, which is a
+  different project. Cheap resilience instead: multi-server SNTP
+  (esp_sntp already indexes servers + reachability) and RTC holdover
+  (milestone 6).
+- **NTP server priority**: manual CLI override > SD config JSON
+  (milestone 8) > DHCP option 42 > pool.ntp.org fallback (§8.4).
+
 ---
 
 ## 12. Non-goals and SD role
 
-Not building: LVGL GUI, voice recognition, Bluetooth UI, precision RTC calibration, leap-second historical table, complex on-device menu.
+Not building: LVGL GUI, voice recognition, Bluetooth UI, precision RTC calibration, leap-second historical table, complex on-device menu, full RFC 5905 NTP client or xleave (SNTP suffices — see Roadmap decisions in §11).
 
 **SD card role**: store a config file (TZ offset, TAI/GPS offset overrides, alarm times) and alarm sound-effect samples. Not a general log sink in the first version. Config files are pushed over the LAN via the REST `/fs/` upload endpoint (§8.6) — plain HTTP PUT from curl/Python, deliberately not WebDAV.
 
@@ -483,7 +507,7 @@ status in §11.
 ```text
 Product         RLCD Time Scale Monitor
 Display         400×300 landscape monochrome (RLCD: bit 0 = ink/black)
-Primary source  Wi-Fi SNTP/NTP (DHCP option 42, manual override, pool fallback)
+Primary source  Wi-Fi SNTP (CLI > SD config > DHCP option 42 > pool fallback)
 Holdover        PCF85063 RTC / ESP32 system time  [RTC not yet wired]
 Main fields     local time, UTC, MJD(TAI), GPS week/TOW, ISO week
 Aesthetic       fixed-width time-scale telemetry instrument

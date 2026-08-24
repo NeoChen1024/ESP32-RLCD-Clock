@@ -73,9 +73,10 @@ idf.py -p /dev/ttyACM1 build flash
 - **HTTP debug server** (:80): `/`, `/status`, `/snapshot.pbm`,
   `/snapshot.bmp`. Snapshots encode via the shared `frame_export`, so
   host↔target exports are byte-comparable.
-- **NTP**: manual `ntp server` > DHCP option 42 > pool.ntp.org, with a
-  watchdog that reverts to the pool if the DHCP-provided server cannot sync
-  within ~18 s.
+- **NTP**: manual `ntp server` CLI > SD config `ntp_server` (milestone 8) >
+  DHCP option 42 > pool.ntp.org, with a watchdog that reverts to the pool if
+  the DHCP-provided server cannot sync within ~18 s. Stays on the lwIP SNTP
+  client — full NTP/xleave is a recorded non-goal (see design notes §11).
 
 ## Design reference
 
