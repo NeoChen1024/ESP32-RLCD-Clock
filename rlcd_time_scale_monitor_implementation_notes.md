@@ -276,7 +276,7 @@ Wi-Fi and HTTP are event/task-driven.
 
 ### 8.3 ClockModel snapshot
 
-The model is the shared `clock_model_t` (host/src/time_model.h, verbatim on both platforms):
+The model is the shared `clock_model_t` (common/time_model.h, verbatim on both platforms):
 
 ```c
 typedef struct {
@@ -348,10 +348,11 @@ Design rules:
 ```text
 rlcd-time-scale-monitor/
   AGENTS.md             environment + bring-up notes
+  common/               shared pure-C render path (compiled verbatim by both)
+    time_model.{h,c} render_faces.{h,c} frame_export.{h,c} display_geometry.h
   host/                 SDL3 simulator (build: cmake -S host -B build)
-    src/                main.c, host_time.c, time_model.{h,c}, render_faces.{h,c},
-                        display_geometry.h, sdl3_backend.{h,c},
-                        frame_export.{h,c}, u8g2_selected_fonts.c
+    src/                host-only platform code: main.c, host_time.c,
+                        sdl3_backend.{h,c}, u8g2_selected_fonts.c
     tests/              test_time_model.c, test_frame_export.c
   firmware/             ESP-IDF bring-up project (idf.py -p /dev/ttyACM1 flash)
     main/               app_main.c, cli.c, wifi_mgr.{h,c}, sntp_mgr.{h,c},
@@ -365,11 +366,11 @@ rlcd-time-scale-monitor/
   tools/                build_fonts.sh, dump_screenshot.py  [future]
 ```
 
-**Shared verbatim sources** — compiled from `host/src/` by BOTH builds so host
+**Shared verbatim sources** — compiled from `common/` by BOTH builds so host
 and target can never drift (the "no parallel renderer" rule of §6):
 
 - `time_model.c` — pure int64 time-scale derivations; platform hooks
-  `time_model_now()` / `tz_offset_minutes()` live in `host/host_time.c`
+  `time_model_now()` / `tz_offset_minutes()` live in `host/src/host_time.c`
   (host) and `firmware/main/model.c` (target)
 - `render_faces.c` — the single 400×300 face
 - `frame_export.c` — PBM/BMP encoding (§8.5)
@@ -386,7 +387,7 @@ void render_frame(u8g2_t *g)
 {
     clock_model_t m;
     time_model_now(&m);          /* platform glue: SNTP + Wi-Fi + sensors */
-    render_face(g, &m);          /* shared, from host/src/render_faces.c */
+    render_face(g, &m);          /* shared, from common/render_faces.c */
 }
 ```
 
@@ -454,4 +455,4 @@ SD role         config file + alarm time / sound-effect storage  [not built]
 Core architectural principle: first write it as a portable 400×300 monochrome
 instrument renderer, make SDL3 the first display backend, and only then wire
 ESP32/ST7305 in as the hardware backend. The renderer and time model are now
-compiled verbatim from `host/src/` into the firmware (§9).
+compiled verbatim from `common/` into the firmware (§9).

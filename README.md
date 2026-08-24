@@ -12,8 +12,10 @@ as holdover. No GNSS, no PPS, no leap-second historical table.
 ```
 AGENTS.md                                            env, hardware facts, bring-up gotchas
 rlcd_time_scale_monitor_implementation_notes.md      design reference (current status)
+common/                                              shared pure-C render path
+  time_model.{h,c} render_faces.{h,c} frame_export.{h,c} display_geometry.h
 host/                                                host-first simulator (SDL3 + u8g2)
-  src/    time model + host glue, render face, frame export, SDL3 backend
+  src/    host platform code only: main, host_time glue, SDL3 backend
   tests/  offline unit tests (time model, frame export)
 firmware/                                            ESP-IDF v6.0.2 target firmware
   main/       app, CLI, Wi-Fi/SNTP/HTTP, display task, sensors, model glue
@@ -22,7 +24,7 @@ u8g2/                                                u8g2 submodule (drawing eng
 docs/                                                schematics
 ```
 
-The render path is shared: `host/src/time_model.c`, `render_faces.c` and
+The render path is shared: `common/time_model.c`, `render_faces.c` and
 `frame_export.c` are compiled **verbatim** into both the host simulator and
 the firmware (platform hooks `time_model_now()` / `tz_offset_minutes()` live
 in per-platform glue). u8g2 is the only drawing engine; SDL3 only presents

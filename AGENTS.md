@@ -81,7 +81,7 @@ idf.py -p /dev/ttyACM1 build flash
   NOT persisted (WIFI_STORAGE_RAM; nothing written to NVS; TZ defaults to
   UTC+8 at boot).
 - **UI**: the full time-scale face is ported. Shared sources compiled verbatim
-  from `host/src/`: `time_model.c` (pure int64 derivations; platform hooks
+  from `common/`: `time_model.c` (pure int64 derivations; platform hooks
   `time_model_now()` + `tz_offset_minutes()` live in the platform glue),
   `render_faces.c` (the 400x300 single face), `frame_export.c`. Host glue is
   `host/src/host_time.c`; device glue is `firmware/main/model.c` (fills
@@ -122,7 +122,7 @@ idf.py -p /dev/ttyACM1 build flash
   `/snapshot.bmp`. Snapshot renders the current face and encodes via
   `fopencookie` streaming into the shared `frame_export` (same bytes as host).
 - u8g2 is compiled from the repo submodule by `firmware/components/u8g2/`;
-  `frame_export.{h,c}` is compiled straight from `host/src/` — both stay
+  `frame_export.{h,c}` is compiled straight from `common/` — both stay
   verbatim-shared (notes §8.5, §9).
 
 ## Host simulator
@@ -133,6 +133,6 @@ ctest --test-dir build --output-on-failure
 ./build/rlcd_host --png out.png   # headless render; also --pbm / --bmp
 ```
 
-Shared pure-C frame exporters (`host/src/frame_export.{h,c}`) must stay
+Shared pure-C frame exporters (`common/frame_export.{h,c}`) must stay
 verbatim-shared with the target so host↔target screenshot diffs are
 byte-exact (see notes §8.5).

@@ -17,12 +17,12 @@ target_include_directories(u8g2_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../u8g2
 add_executable(rlcd_host
   src/main.c
   src/host_time.c
-  src/time_model.c
-  src/render_faces.c
   src/sdl3_backend.c
-  src/frame_export.c
+  ../common/time_model.c
+  ../common/render_faces.c
+  ../common/frame_export.c
 )
-target_include_directories(rlcd_host PRIVATE src)
+target_include_directories(rlcd_host PRIVATE src ../common)
 target_link_libraries(rlcd_host PRIVATE u8g2_core SDL3::SDL3)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -30,13 +30,13 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 
 # ---- frame-export unit test (no SDL needed) ----
-add_executable(test_frame_export tests/test_frame_export.c src/frame_export.c)
-target_include_directories(test_frame_export PRIVATE src)
+add_executable(test_frame_export tests/test_frame_export.c ../common/frame_export.c)
+target_include_directories(test_frame_export PRIVATE ../common)
 enable_testing()
 add_test(NAME frame_export COMMAND test_frame_export)
 
 # ---- time-model unit test (no SDL needed) ----
-add_executable(test_time_model tests/test_time_model.c src/time_model.c)
-target_include_directories(test_time_model PRIVATE src ../u8g2/csrc)
+add_executable(test_time_model tests/test_time_model.c ../common/time_model.c)
+target_include_directories(test_time_model PRIVATE ../common ../u8g2/csrc)
 enable_testing()
 add_test(NAME time_model COMMAND test_time_model)

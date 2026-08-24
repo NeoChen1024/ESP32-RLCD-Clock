@@ -11,13 +11,17 @@ host/
   CMakeLists.txt
   src/
     main.c            SDL3 main loop, 15 Hz frame cap, keyboard input
-    display_geometry.h shared visible/buffer dimensions (no SDL dependency)
-    time_model.{h,c}  integer time-scale derivations (MJD-TAI, GPS week/TOW, civil, ISO week)
-    render_faces.{h,c} u8g2 draw calls for the single all-in-one face
+    host_time.c       platform glue: time_model_now(), tz_offset_minutes()
     sdl3_backend.{h,c} u8g2 display callback + SDL3 presenter (400x300 visible, 400x304 buffer)
   tests/
     test_time_model.c offline time-model checks (no SDL)
+    test_frame_export.c byte-contract lock for the shared PBM/BMP encoders
   sample.png         single-face screenshot (--png output)
+../common/            shared pure-C sources, compiled verbatim by host AND firmware:
+  time_model.{h,c}   integer time-scale derivations (MJD-TAI, GPS week/TOW, civil, ISO week)
+  render_faces.{h,c} u8g2 draw calls for the single all-in-one face
+  frame_export.{h,c} PBM/BMP encoders
+  display_geometry.h shared visible/buffer dimensions (no SDL dependency)
 ```
 
 ## Build
