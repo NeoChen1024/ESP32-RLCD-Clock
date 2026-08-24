@@ -486,6 +486,25 @@ and the full host UI is ported to the target (§10) with TZ configurable via CLI
 - **NTP server priority**: manual CLI override > SD config JSON
   (milestone 8) > DHCP option 42 > pool.ntp.org fallback (§8.4).
 
+**Known issues** (behavior verified in `firmware/main/`, recorded so the
+fixes are not re-scoped):
+
+- **Wi-Fi does not reconnect after a post-connect drop.** `s_auto_reconnect`
+  is only set while the one-shot `wifi_task` (spawned by `wifi_mgr_connect`)
+  is alive; once connected, that task exits and any later
+  `WIFI_EVENT_STA_DISCONNECTED` merely sets `WIFI_FAIL_BIT` — no reconnect.
+  The retry budget only covers the initial connect sequence. Planned fix:
+  persistent reconnect policy after connect (retry with backoff while
+  credentials remain set) — the instrument is headless and should self-heal
+  from AP drops.
+- **NTP stays on the pool fallback after reverting.** The §8.4 watchdog
+  reverts to pool.ntp.org when the DHCP option-42 server fails to sync
+  within ~18 s, but nothing ever re-evaluates that server, so a later
+  recovery (e.g. the DHCP host's NTP daemon coming back) is never picked
+  up — the device stays on the pool. Planned fix: periodic re-evaluation of
+  higher-priority sources (re-try the DHCP server periodically, switch back
+  when it syncs).
+
 ---
 
 ## 12. Non-goals and SD role

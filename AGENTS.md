@@ -102,6 +102,8 @@ idf.py -p /dev/ttyACM1 build flash
   DHCP mode is authoritative (option-42 IPs replace the pool, no automatic
   fallback), so sntp_mgr runs a watchdog: if the DHCP-provided server hasn't
   synced ~18 s after GOT_IP, it reverts to pool.ntp.org (`source: fallback`).
+  Known issue (Roadmap §11): once on the pool fallback it never re-evaluates
+  the DHCP server, so a later DHCP-NTP recovery is not picked up.
   Manual override always wins. Do NOT re-apply fallback names on GOT_IP —
   that clobbers the DHCP-written addresses (bug fixed 2026-08-22).
 - **Display**: real ST7305 panel via `firmware/components/u8g2_st7305/`
