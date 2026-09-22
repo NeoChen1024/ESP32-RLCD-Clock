@@ -14,12 +14,20 @@ static const char *TAG = "model";
 #define TZ_DEFAULT_MINUTES (8 * 60)   /* UTC+8 */
 
 static int s_tz_minutes = TZ_DEFAULT_MINUTES;
+static int s_config_tz_minutes = TZ_DEFAULT_MINUTES;
+static bool s_cli_tz;
 
-void model_tz_set_default(void) { s_tz_minutes = TZ_DEFAULT_MINUTES; }
+void model_tz_set_default(void) { s_cli_tz = false; s_tz_minutes = s_config_tz_minutes; }
+void model_tz_set_config(int minutes)
+{
+    s_config_tz_minutes = minutes;
+    if (!s_cli_tz) s_tz_minutes = minutes;
+}
 int  model_tz_get(void)         { return s_tz_minutes; }
 
 void model_tz_set(int minutes)
 {
+    s_cli_tz = true;
     s_tz_minutes = minutes;
     ESP_LOGI(TAG, "TZ offset set to %+d min (%c%02d:%02d)", minutes,
              minutes < 0 ? '-' : '+', (minutes < 0 ? -minutes : minutes) / 60,
@@ -37,23 +45,21 @@ void time_model_now(clock_model_t *m)
 {
     memset(m, 0, sizeof *m);
 
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    m->unix_ms = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
-
     sntp_mgr_status_t s = sntp_mgr_status();
+    m->unix_ms = s.unix_ms;
     wifi_mgr_status_t w = wifi_mgr_status();
 
     /* Trust gating: only a completed SNTP sync makes the time trustworthy.
      * The top-bar sync state is the single source of trust (notes §4.1). */
-    if (s.started && s.synced) {
+    if (s.started && s.time_trusted) {
         m->time_trusted = true;
         if (w.state == WIFI_MGR_CONNECTED) {
-            m->sync = SYNC_NTP_OK;
+            m->sync = s.fresh ? SYNC_NTP_OK : SYNC_RTC_HOLD;
         } else {
             m->sync = SYNC_WIFI_LOST;
         }
-        m->ntp_age_s = s.ntp_age_s;
+    } else if (s.synced) {
+        m->sync = SYNC_TIME_UNSAFE;
     } else if (w.state == WIFI_MGR_CONNECTED) {
         m->sync = SYNC_SYNCING;          /* connected, waiting on SNTP */
     } else if (w.state == WIFI_MGR_CONNECTING) {
@@ -62,6 +68,7 @@ void time_model_now(clock_model_t *m)
         m->sync = SYNC_BOOT_UNS;
     }
 
+    m->ntp_age_s = s.ntp_age_s;
     m->wifi_rssi_dbm = w.rssi_dbm;
 
     /* Real telemetry (sensors wired since bring-up). SHTC3 read takes ~20ms;

@@ -33,6 +33,7 @@ static const char *sync_label(sync_state_t s)
     case SYNC_NTP_OK:    return "NTP OK";
     case SYNC_RTC_HOLD:  return "RTC HOLD";
     case SYNC_WIFI_LOST: return "WIFI LOST";
+    case SYNC_TIME_UNSAFE: return "TIME UNS";
     }
     return "????????";
 }
@@ -127,7 +128,8 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
 
     /* ---- Top bar (7x13, baseline y=16) ---- */
     u8g2_SetFont(g, FONT_SMALL);
-    fmt_local_date(m, tz, buf, sizeof buf);
+    if (m->time_trusted) fmt_local_date(m, tz, buf, sizeof buf);
+    else snprintf(buf, sizeof buf, "TIME UNSYNC");
     u8g2_DrawStr(g, 4, 16, buf);
 
     char topbar_right[40];
@@ -136,7 +138,8 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
 
     /* ---- Main time (big, centered) ---- */
     u8g2_SetFont(g, FONT_BIG);
-    fmt_hms(m, tz, buf, sizeof buf);
+    if (m->time_trusted) fmt_hms(m, tz, buf, sizeof buf);
+    else snprintf(buf, sizeof buf, "--:--:--");
     int tw = u8g2_GetStrWidth(g, buf);
     u8g2_DrawStr(g, (DISP_W - tw) / 2, 70, buf);
 
@@ -144,7 +147,9 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
      * so the big time reaches ~y91; place this line below it) */
     u8g2_SetFont(g, FONT_MONO);
     char tzbuf[16]; fmt_tz_str(tz, tzbuf, sizeof tzbuf);
-    char utcbuf[16]; fmt_utc_hms(m, utcbuf, sizeof utcbuf);
+    char utcbuf[16];
+    if (m->time_trusted) fmt_utc_hms(m, utcbuf, sizeof utcbuf);
+    else snprintf(utcbuf, sizeof utcbuf, "--:--:--Z");
     snprintf(buf, sizeof buf, "%s   UTC %s", tzbuf, utcbuf);
     int uw = u8g2_GetStrWidth(g, buf);
     u8g2_DrawStr(g, (DISP_W - uw) / 2, 106, buf);
@@ -158,7 +163,9 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
     /* ISO week date (own row) */
     u8g2_SetFont(g, FONT_MONO);
     u8g2_DrawStr(g, LABEL_X, y, "ISO");
-    char isobuf[20]; fmt_iso_week(m, isobuf, sizeof isobuf);
+    char isobuf[20];
+    if (m->time_trusted) fmt_iso_week(m, isobuf, sizeof isobuf);
+    else snprintf(isobuf, sizeof isobuf, "---- W-- -");
     u8g2_SetFont(g, FONT_SCALE);
     u8g2_DrawStr(g, VALUE_X, y, isobuf);
 

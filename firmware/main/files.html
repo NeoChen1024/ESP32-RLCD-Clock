@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RLCD File Manager</title><link rel="stylesheet" href="/web_style.css"></head><body><main>
+<header><div><div class="brand">RLCD TIME SCALE MONITOR</div><h1>Configuration &amp; sounds</h1></div><nav aria-label="Main navigation"><a href="/">Display</a><a href="/files" aria-current="page">Files</a></nav></header>
+<p class="muted">Keep dated configuration versions and upload alarm sounds. The device selects the newest valid JSON from SD first, then internal flash. Alarm playback is not yet implemented.</p>
+<section>
+  <div class="toolbar"><label for="volume">Storage</label><select id="volume" aria-label="Storage volume"></select><button id="refresh">Refresh</button></div>
+  <p id="space" class="muted">Loading storage…</p><p id="active" class="muted">Checking selected configuration…</p>
+</section>
+<section>
+  <h2>Upload files</h2><div id="drop"><strong>Drop files here</strong><div><input id="upload" type="file" multiple accept=".json,.wav" aria-label="Choose JSON or WAV files"></div><button class="primary" id="send">Upload files</button></div>
+  <p class="muted">JSON files become new, timestamped versions in <code>config/</code> (16 KiB each). WAV files go into <code>sounds/</code> (16 MiB each). WAV names use ASCII letters, numbers, spaces, underscores, hyphens and periods.</p>
+  <progress id="progress" value="0" max="100" aria-label="Upload progress"></progress><p id="message" role="status" aria-live="polite"></p>
+</section>
+<section>
+  <div class="toolbar"><h2 id="heading" style="margin:0;flex:1">Files</h2><button id="up" hidden>Back to root</button><button id="newconfig">New config version</button></div>
+  <div class="tablewrap"><table><thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div>
+</section>
+<footer>Versions sort by filename; use UTC timestamp names for chronological order. Old versions remain available until you delete them. Unmount SD in the serial console before removing the card.<br>API: <code>GET /fs/active</code> shows the selected version. Use <code>/fs/flash/…</code> or <code>/fs/sd/…</code> for GET, PUT and DELETE.</footer>
+<dialog id="editor"><h2 id="editname"></h2><p class="muted">Saving creates a new version. Existing files remain unchanged.</p><textarea id="text" spellcheck="false" aria-label="JSON content"></textarea><p id="editerror" role="alert"></p><div class="toolbar"><button class="primary" id="save">Save new version</button><button id="cancel">Cancel</button></div></dialog>
+</main><script>
+'use strict';
+const $ = id => document.getElementById(id);
+const labels = {flash:'Internal Flash', sd:'SD Card'};
+let folder = '', busy = false, selected = [], editVolume = '', sequence = 0;
+const bytes = n => n === undefined ? 'unknown' : n < 1024 ? n+' B' : n < 1048576 ? (n/1024).toFixed(1)+' KiB' : n < 1073741824 ? (n/1048576).toFixed(1)+' MiB' : (n/1073741824).toFixed(2)+' GiB';
+function url(path='',volume=$('volume').value){return '/fs/'+volume+'/'+path.split('/').map(encodeURIComponent).join('/')}
+function message(text,bad=false){$('message').textContent=text;$('message').classList.toggle('bad',bad)}
+async function api(path,options){
+  const r=await fetch(path,options);
+  if(!r.ok){let detail;try{detail=(await r.json()).error}catch{detail=r.statusText}throw Error(r.status+' '+detail)}
+  return r;
+}
+function busyState(value){
+  busy=value;
+  for(const id of ['volume','send','upload','refresh','up','newconfig'])$(id).disabled=value;
+  for(const button of $('rows').querySelectorAll('button'))button.disabled=value;
+}
+async function activeConfig(){
+  const state=await(await api('/fs/active')).json();
+  $('active').textContent=state.found?'Selected on this device: '+labels[state.volume]+' /'+state.path+' · TZ '+state.tz_offset_minutes+' min · NTP '+(state.ntp_server||'DHCP/fallback'):'Selected on this device: none (UTC+8, DHCP/fallback)';
+  return state;
+}
+async function volumes(){
+  const data=await(await api('/fs/')).json(), old=$('volume').value;
+  $('volume').replaceChildren();
+  for(const v of data.volumes){
+    const option=document.createElement('option');option.value=v.name;
+    option.textContent=(labels[v.name]||v.name)+(v.mounted?'':' (not mounted)');
+    option.disabled=!v.mounted;$('volume').append(option);
+  }
+  const active=data.volumes.find(v=>v.name===old&&v.mounted)||data.volumes.find(v=>v.mounted);
+  if(active){$('volume').value=active.name;$('space').textContent='Available '+bytes(active.free_bytes)+' / '+bytes(active.total_bytes)+' · '+active.mount}
+  else $('space').textContent='No mounted storage. Mount SD or initialize internal flash from the serial console.';
+  await activeConfig();
+  return !!active;
+}
+function button(label,action,klass=''){
+  const b=document.createElement('button');b.textContent=label;b.className=klass;
+  b.onclick=()=>Promise.resolve().then(action).catch(e=>message(e.message,true));return b;
+}
+async function list(){
+  const data=await(await api(url(folder))).json();
+  $('heading').textContent=(labels[$('volume').value]||'')+' /'+folder;
+  $('up').hidden=!folder;$('rows').replaceChildren();
+  for(const entry of data.entries){
+    const tr=document.createElement('tr'), name=document.createElement('td'),size=document.createElement('td'),actions=document.createElement('td');
+    name.className='name';name.textContent=entry.name;
+    size.textContent=entry.type==='directory'?'—':bytes(entry.size);actions.className='actions';
+    if(entry.type==='directory') actions.append(button('Open',async()=>{if(busy)return;folder=entry.name+'/';await list()}));
+    else {
+      const path=folder+entry.name,link=document.createElement('a');
+      link.href=url(path);link.textContent='Download';link.download=entry.name;actions.append(link);
+      if(folder==='config/') actions.append(button('Edit as new version',()=>edit(path)));
+      actions.append(button('Delete',async()=>{
+        if(busy||!confirm('Delete '+labels[$('volume').value]+' /'+path+'?'))return;
+        await api(url(path),{method:'DELETE'});message('Deleted '+path);await refresh();
+      },'danger'));
+    }
+    tr.append(name,size,actions);$('rows').append(tr);
+  }
+  if(!data.entries.length){const tr=document.createElement('tr'),td=document.createElement('td');td.colSpan=3;td.className='empty';td.textContent='No files here yet.';tr.append(td);$('rows').append(tr)}
+  if(data.truncated)message('Showing the newest 256 files in this directory.',true);
+}
+async function refresh(){if(await volumes())await list();else $('rows').replaceChildren()}
+function versionName(){
+  const stamp=new Date().toISOString().replace(/[-:.]/g,'');
+  return 'config/'+stamp+'-'+String(++sequence).padStart(4,'0')+'.json';
+}
+function put(path,body,volume){
+  return new Promise((resolve,reject)=>{
+    const x=new XMLHttpRequest();x.open('PUT',url(path,volume));x.timeout=125000;
+    x.upload.onprogress=e=>{if(e.lengthComputable)$('progress').value=e.loaded/e.total*100};
+    x.onload=()=>{if(x.status>=200&&x.status<300)resolve();else{let detail=x.statusText;try{detail=JSON.parse(x.responseText).error}catch{}reject(Error(x.status+' '+detail))}};
+    x.onerror=()=>reject(Error('Network interrupted. Refresh to check the files.'));
+    x.ontimeout=()=>reject(Error('Upload timed out. Refresh to check the files.'));
+    x.send(body);
+  });
+}
+async function upload(){
+  if(busy)return;
+  const files=selected.length?selected:[...$('upload').files];
+  if(!files.length){message('Choose files first.',true);return}
+  const volume=$('volume').value;busyState(true);
+  try{
+    for(const file of files){
+      let path;
+      if(file.name.toLowerCase().endsWith('.json'))path=versionName();
+      else if(file.name.endsWith('.wav'))path='sounds/'+file.name;
+      else throw Error('Unsupported file: '+file.name);
+      message('Uploading '+file.name+' to '+path);$('progress').value=0;
+      await put(path,file,volume);
+    }
+    message('Saved '+files.length+' file'+(files.length===1?'':'s')+'.');
+    selected=[];$('upload').value='';await refresh();
+  }catch(e){message(e.message,true)}finally{busyState(false)}
+}
+async function edit(path){
+  if(busy)return;
+  editVolume=$('volume').value;
+  $('editname').textContent='New version on '+labels[editVolume];
+  if(path) $('text').value=await(await api(url(path,editVolume))).text();
+  else {
+    const active=await activeConfig();
+    $('text').value=active.found?await(await api(url(active.path,active.volume))).text():'{}';
+  }
+  $('editerror').textContent='';$('editor').showModal();
+}
+$('save').onclick=async()=>{
+  try{
+    const data=JSON.parse($('text').value);
+    if(!data||Array.isArray(data)||typeof data!=='object')throw Error('JSON root must be an object.');
+    const path=versionName();$('save').disabled=true;
+    await put(path,new Blob([$('text').value],{type:'application/json'}),editVolume);
+    $('editor').close();message('Saved new version '+labels[editVolume]+' /'+path);await refresh();
+  }catch(e){$('editerror').textContent=e.message}finally{$('save').disabled=false}
+};
+$('cancel').onclick=()=>$('editor').close();
+$('newconfig').onclick=()=>edit().catch(e=>message(e.message,true));
+$('send').onclick=upload;
+$('upload').onchange=()=>{selected=[];message('Selected '+$('upload').files.length+' file(s).')};
+$('volume').onchange=()=>{folder='';message('');refresh().catch(e=>message(e.message,true))};
+$('refresh').onclick=()=>refresh().catch(e=>message(e.message,true));
+$('up').onclick=()=>{folder='';list().catch(e=>message(e.message,true))};
+$('drop').ondragover=e=>{e.preventDefault();if(!busy)$('drop').classList.add('over')};
+$('drop').ondragleave=()=>$('drop').classList.remove('over');
+$('drop').ondrop=e=>{e.preventDefault();$('drop').classList.remove('over');if(busy)return;selected=[...e.dataTransfer.files];message('Selected '+selected.length+' file(s). Click Upload files to start.')};
+refresh().catch(e=>message(e.message,true));
+</script></body></html>

@@ -11,7 +11,9 @@
 #include "esp_console.h"
 #include "linenoise/linenoise.h"
 #include "model.h"
+#include "config_mgr.h"
 #include "sensors.h"
+#include "storage_mgr.h"
 #include "sntp_mgr.h"
 #include "wifi_mgr.h"
 static const char *state_str(wifi_mgr_state_t s)
@@ -28,7 +30,7 @@ static const char *state_str(wifi_mgr_state_t s)
 static int cmd_wifi(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("usage: wifi connect <ssid> [password] | wifi status | wifi disconnect\n");
+        printf("usage: wifi connect <ssid> [password] | wifi status | wifi disconnect | wifi reconnect\n");
         return 1;
     }
     if (strcmp(argv[1], "connect") == 0) {
@@ -57,6 +59,11 @@ static int cmd_wifi(int argc, char **argv)
         printf("disconnected\n");
         return 0;
     }
+    if (strcmp(argv[1], "reconnect") == 0) {
+        wifi_mgr_reconnect();
+        printf("reconnect requested (if credentials are active)\n");
+        return 0;
+    }
     printf("unknown wifi subcommand: %s\n", argv[1]);
     return 1;
 }
@@ -72,7 +79,11 @@ static int cmd_ntp(int argc, char **argv)
         sntp_mgr_status_t st = sntp_mgr_status();
         printf("started: %s\n", st.started ? "yes" : "no");
         printf("synced:  %s\n", st.synced ? "yes" : "no");
+        printf("trusted: %s\n", st.time_trusted ? "yes" : "no");
+        printf("fresh:   %s\n", st.fresh ? "yes" : "no");
+        printf("age:     %lu s\n", (unsigned long)st.ntp_age_s);
         printf("source:  %s\n", st.using_manual ? "manual" :
+                                 st.using_config ? "config" :
                                  st.using_dhcp ? "dhcp" : "fallback");
         printf("server_name: %s\n", st.server0);
         printf("server_ip:   %s\n", st.server0_ip);
@@ -100,7 +111,7 @@ static int cmd_ntp(int argc, char **argv)
     }
     if (strcmp(argv[1], "reset") == 0) {
         sntp_mgr_reset_servers();
-        printf("ntp servers reset (dhcp/fallback)\n");
+        printf("ntp servers reset (config/DHCP/fallback priority)\n");
         return 0;
     }
     if (strcmp(argv[1], "resync") == 0) {
@@ -138,7 +149,7 @@ static int cmd_tz(int argc, char **argv)
     }
     if (strcmp(argv[1], "reset") == 0) {
         model_tz_set_default();
-        printf("tz reset to default (UTC+8)\n");
+        printf("tz reset to selected config (or UTC+8)\n");
         return 0;
     }
     const char *p = argv[1];
@@ -196,11 +207,38 @@ static int cmd_sensor(int argc, char **argv)
     return 0;
 }
 
+static int cmd_sd(int argc, char **argv)
+{
+    return storage_mgr_command(argc, argv, stdout);
+}
+
+static int cmd_flash(int argc, char **argv)
+{
+    return storage_flash_command(argc, argv, stdout);
+}
+
+static int cmd_config(int argc, char **argv)
+{
+    if (argc > 2 || (argc == 2 && strcmp(argv[1], "status") && strcmp(argv[1], "reload"))) {
+        printf("usage: config [status] | reload\n"); return 1;
+    }
+    if (argc == 2 && !strcmp(argv[1], "reload")) config_mgr_reload();
+    if (!storage_lock(5000)) { printf("storage busy\n"); return 1; }
+    config_selection_t st;
+    config_mgr_current_locked(&st);
+    storage_unlock();
+    printf("selected: %s\n", st.found ? st.volume : "none");
+    if (st.found) printf("file:     %s\n", st.path);
+    printf("config TZ: %+d min\neffective TZ: %+d min\nconfig NTP: %s\n",
+           st.tz_offset_minutes, model_tz_get(), st.ntp_server[0] ? st.ntp_server : "DHCP/fallback");
+    return 0;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
-        { .command = "wifi", .help = "Wi-Fi STA control: connect <ssid> [password] | status | disconnect",
-          .hint = "connect \"<ssid>\" [password] | status | disconnect",
+        { .command = "wifi", .help = "Wi-Fi STA control: connect <ssid> [password] | status | disconnect | reconnect",
+          .hint = "connect \"<ssid>\" [password] | status | disconnect | reconnect",
           .func = cmd_wifi },
         { .command = "ntp", .help = "SNTP control: status | server <host|ip> | reset | resync",
           .hint = "status | server \"<host|ip>\" | reset | resync",
@@ -212,6 +250,12 @@ static void register_cmds(void)
           .func = cmd_tz },
         { .command = "sensor", .help = "read SHTC3 temp/humidity and battery voltage",
           .func = cmd_sensor },
+        { .command = "config", .help = "selected version: status | reload",
+          .func = cmd_config },
+        { .command = "sd", .help = "SD card: status | mount | unmount | ls [dir] | cat <file> | test | format (ERASE SD)",
+          .func = cmd_sd },
+        { .command = "flash", .help = "Internal FAT: status | mount | init (formats if unmountable)",
+          .func = cmd_flash },
     };
     for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) {
         esp_console_cmd_register(&cmds[i]);

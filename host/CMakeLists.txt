@@ -40,3 +40,38 @@ add_executable(test_time_model tests/test_time_model.c ../common/time_model.c)
 target_include_directories(test_time_model PRIVATE ../common ../u8g2/csrc)
 enable_testing()
 add_test(NAME time_model COMMAND test_time_model)
+
+# Firmware policy regressions run against a deterministic fake IDF transport.
+add_executable(test_clock_health tests/test_clock_health.c ../common/clock_health.c)
+target_include_directories(test_clock_health PRIVATE ../common)
+target_compile_options(test_clock_health PRIVATE -UNDEBUG)
+add_test(NAME clock_health COMMAND test_clock_health)
+
+add_executable(test_network_managers tests/test_network_managers.c
+  tests/fakes/fake_idf.c ../firmware/main/sntp_mgr.c ../firmware/main/wifi_mgr.c
+  ../common/clock_health.c)
+target_include_directories(test_network_managers PRIVATE tests/fakes ../firmware/main ../common)
+target_compile_options(test_network_managers PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME network_managers COMMAND test_network_managers)
+
+add_executable(test_render_trust tests/test_render_trust.c src/sdl3_backend.c
+  ../common/render_faces.c ../common/time_model.c ../common/frame_export.c)
+target_include_directories(test_render_trust PRIVATE src ../common)
+target_compile_options(test_render_trust PRIVATE -UNDEBUG)
+target_link_libraries(test_render_trust PRIVATE u8g2_core SDL3::SDL3)
+add_test(NAME render_trust COMMAND test_render_trust)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(CJSON REQUIRED IMPORTED_TARGET libcjson)
+add_executable(test_storage_files tests/test_storage_files.c ../common/storage_files.c)
+target_include_directories(test_storage_files PRIVATE ../common)
+target_link_libraries(test_storage_files PRIVATE PkgConfig::CJSON)
+target_compile_options(test_storage_files PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME storage_files COMMAND test_storage_files)
+
+add_executable(test_config_mgr tests/test_config_mgr.c ../firmware/main/config_mgr.c
+  ../common/storage_files.c)
+target_include_directories(test_config_mgr PRIVATE tests/fakes ../firmware/main ../common)
+target_link_libraries(test_config_mgr PRIVATE PkgConfig::CJSON)
+target_compile_options(test_config_mgr PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME config_mgr COMMAND test_config_mgr)

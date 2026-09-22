@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="refresh" content="5"><title>RLCD Time Scale Monitor</title><link rel="stylesheet" href="/web_style.css"></head>
+<body><main>
+<header><div><div class="brand">RLCD TIME SCALE MONITOR</div><h1>Live display</h1></div><nav aria-label="Main navigation"><a href="/" aria-current="page">Display</a><a href="/files">Files</a></nav></header>
+<p class="muted">A live preview of the instrument's 400 × 300 reflective display. This page refreshes every five seconds.</p>
+<section><div class="readout"><div><span>WIFI</span> <strong id="wifi">Loading…</strong></div><div><span>TIME SOURCE</span> <strong id="source">Loading…</strong></div><div><span>TRUST</span> <strong id="trust">Loading…</strong></div></div></section>
+<section><h2>Panel snapshot</h2><figure class="preview"><img src="/snapshot.bmp" width="400" height="300" alt="Current RLCD panel snapshot"></figure></section>
+<footer><a href="/status">Status JSON</a> · <a href="/snapshot.pbm">Download PBM</a> · <a href="/snapshot.bmp">Download BMP</a></footer>
+</main><script>fetch('/status').then(r=>r.json()).then(s=>{document.getElementById('wifi').textContent=s.wifi.state;document.getElementById('source').textContent=s.sntp.source;document.getElementById('trust').textContent=s.sntp.trusted?'trusted':'untrusted'}).catch(()=>{document.getElementById('wifi').textContent='unavailable'})</script></body></html>

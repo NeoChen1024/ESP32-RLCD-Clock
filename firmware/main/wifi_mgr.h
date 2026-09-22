@@ -25,12 +25,16 @@ typedef struct {
 /* Initialize Wi-Fi STA (event loop + netif + esp_wifi). Call once at boot. */
 bool wifi_mgr_start(void);
 
-/* Connect to SSID (blocking until connected or timeout_s elapses).
- * Returns true on success. Credentials are used once, never stored. */
+/* Queue a connect request. Returns true when accepted, not when connected.
+ * Retries with capped backoff until disconnect or a replacement request.
+ * Credentials remain only in RAM. timeout_s is a legacy, ignored argument. */
 bool wifi_mgr_connect(const char *ssid, const char *password, int timeout_s);
 
 /* Disconnect and stop Wi-Fi. */
 void wifi_mgr_disconnect(void);
+
+/* Force a link drop and let the normal retry policy reconnect using RAM credentials. */
+void wifi_mgr_reconnect(void);
 
 /* Snapshot of current status. */
 wifi_mgr_status_t wifi_mgr_status(void);

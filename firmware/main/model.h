@@ -14,8 +14,9 @@
  * from host/src/ (design notes §9).
  */
 
-/* Reset TZ offset to the default (UTC+8). */
+/* Clear CLI override and use the selected config offset (or UTC+8). */
 void model_tz_set_default(void);
+void model_tz_set_config(int minutes);
 
 /* Set TZ offset in minutes east of UTC (e.g. +480 = UTC+8). */
 void model_tz_set(int minutes);

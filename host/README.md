@@ -2,7 +2,7 @@
 
 Host-first development simulator for the ESP32-S3 RLCD 4.2 time-scale instrument.
 u8g2 is the only drawing engine; SDL3 only presents the final 1-bit framebuffer.
-The same render code will later drive the ST7305 target backend.
+The same render code also drives the ST7305 target backend.
 
 ## Layout
 
@@ -13,14 +13,14 @@ host/
     main.c            SDL3 main loop, 15 Hz frame cap, keyboard input
     host_time.c       platform glue: time_model_now(), tz_offset_minutes()
     sdl3_backend.{h,c} u8g2 display callback + SDL3 presenter (400x300 visible, 400x304 buffer)
-  tests/
-    test_time_model.c offline time-model checks (no SDL)
-    test_frame_export.c byte-contract lock for the shared PBM/BMP encoders
+  tests/            seven CTest targets for rendering, time, network, storage and config
   sample.png         single-face screenshot (--png output)
-../common/            shared pure-C sources, compiled verbatim by host AND firmware:
+../common/            shared pure-C sources, compiled by host and firmware:
   time_model.{h,c}   integer time-scale derivations (MJD-TAI, GPS week/TOW, civil, ISO week)
   render_faces.{h,c} u8g2 draw calls for the single all-in-one face
   frame_export.{h,c} PBM/BMP encoders
+  clock_health.{h,c} monotonic trust and clock-step policy
+  storage_files.{h,c} managed paths, file validation and version selection
   display_geometry.h shared visible/buffer dimensions (no SDL dependency)
 ```
 
@@ -48,7 +48,7 @@ no-display machines without setting `SDL_VIDEODRIVER`.
 | Key | Action                          |
 |-----|---------------------------------|
 | S   | save `rlcd_screenshot.pbm`       |
-| N   | cycle sync/trust state            |
+| N   | cycle sync/trust state (including expired trust)            |
 | W   | toggle Wi-Fi-lost state           |
 | B   | toggle normal/low battery         |
 | Esc | quit                             |
@@ -62,7 +62,7 @@ A rendered sample is in [`sample.png`](sample.png) (400x300, RGBA).
 ## Design notes
 
 - **u8g2 is the only drawing engine.** SDL3 never draws text/glyphs itself; it
-  only copies the u8g2 framebuffer to a texture. Host and target will share the
+  only copies the u8g2 framebuffer to a texture. Host and target compile the
   same `render_faces.c`.
 - **Framebuffer padding.** 300 is not a multiple of 8, so the u8g2 buffer is
   padded to 400x304 (38 tile rows, 15200 bytes). The visible 400x300 top portion
@@ -80,3 +80,11 @@ A rendered sample is in [`sample.png`](sample.png) (400x300, RGBA).
 ```sh
 ctest --test-dir host/build --output-on-failure
 ```
+
+The seven CTest targets cover time math, frame encoding, monotonic trust and
+clock-step scheduling, firmware Wi-Fi/SNTP managers with a fake IDF transport,
+masking all time fields when untrusted, and file-path/content validation with
+interrupted FAT replacement recovery. They also test SD-first config version
+selection and fallback to internal flash/defaults. Storage tests link the
+system libcjson package through pkg-config. The fake transport exercises the
+actual manager sources but does not emulate radio/RTOS/network timing.

@@ -31,6 +31,7 @@ typedef enum {
     SYNC_NTP_OK,
     SYNC_RTC_HOLD,
     SYNC_WIFI_LOST,
+    SYNC_TIME_UNSAFE,
 } sync_state_t;
 
 typedef struct {
@@ -66,7 +67,8 @@ void civil_fields(const clock_model_t *m, int tz_offset_min,
 void iso_week_date(const clock_model_t *m, int *iso_year, int *iso_week, int *iso_weekday);
 
 /* Current TZ offset in minutes east of UTC. Implemented per platform:
- * host = system local time; target = CLI-configurable (default UTC+8). */
+ * host = system local time; target = selected SD/flash config, then a
+ * RAM-only CLI override (default UTC+8 when no usable config exists). */
 int tz_offset_minutes(void);
 
 #endif

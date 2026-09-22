@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "cli.h"
+#include "config_mgr.h"
 #include "display.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -10,21 +11,11 @@
 #include "http_srv.h"
 #include "nvs_flash.h"
 #include "sensors.h"
+#include "storage_mgr.h"
 #include "sntp_mgr.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "app_main";
-
-static void on_ip_event(void *arg, esp_event_base_t base,
-                        int32_t event_id, void *data)
-{
-    (void)arg; (void)base; (void)data;
-    if (event_id == IP_EVENT_STA_GOT_IP) {
-        /* Network is up: re-apply SNTP server selection so DHCP-provided
-         * NTP servers (option 42) are picked up. */
-        sntp_mgr_wifi_connected();
-    }
-}
 
 void app_main(void)
 {
@@ -43,9 +34,6 @@ void app_main(void)
         ESP_LOGE(TAG, "wifi_mgr_start failed");
     }
 
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                               on_ip_event, NULL));
-
     sntp_mgr_start();
 
     if (!sensors_start()) {
@@ -58,10 +46,14 @@ void app_main(void)
         ESP_LOGE(TAG, "display_start failed");
     }
 
+    /* Optional removable storage; a failed mount must not stop the clock. */
+    storage_mgr_start();
+    config_mgr_start();
+
     if (!http_srv_start()) {
         ESP_LOGE(TAG, "http_srv_start failed");
     }
 
-    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, http)");
-    cli_start();   /* blocks forever: REPL on the console UART */
+    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, tz, config, sensor, sd, flash, http)");
+    cli_start();   /* blocks forever: REPL on USB-Serial/JTAG */
 }

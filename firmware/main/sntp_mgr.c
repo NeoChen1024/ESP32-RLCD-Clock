@@ -1,183 +1,212 @@
 #include "sntp_mgr.h"
+#include "clock_health.h"
 
+#include <stdio.h>
 #include <string.h>
-#include <time.h>
-
+#include <sys/time.h>
 #include "esp_log.h"
-#include "esp_sntp.h"
 #include "esp_timer.h"
-#include "lwip/ip_addr.h"
+/* Raw lwIP calls below run exclusively in tcpip_thread (including the DHCP
+ * hook and sync callback). Disable IDF's task-context translating inlines. */
+#define ESP_LWIP_COMPONENT_BUILD
+#include "esp_sntp.h"
+#undef ESP_LWIP_COMPONENT_BUILD
+#undef SNTP_OPMODE_POLL
+#include "lwip/apps/sntp.h"
+#include "lwip/tcpip.h"
+#include "lwip/timeouts.h"
 
 static const char *TAG = "sntp_mgr";
-
-static bool s_started;
-static bool s_synced;
-static bool s_manual;        /* manual override in effect */
-static bool s_dhcp_active;   /* last applied servers came from DHCP */
-static int64_t s_synced_at_s; /* unix time of last successful sync */
-
-static char s_server0[64] = "pool.ntp.org";
+typedef enum { SOURCE_FALLBACK, SOURCE_DHCP, SOURCE_CONFIG, SOURCE_MANUAL } source_t;
+static bool s_started, s_online, s_manual, s_config, s_dhcp_dirty;
+static source_t s_source;
+static clock_health_t s_health;
+static char s_manual_name[64];
+static char s_config_name[64];
+static char s_name[64] = "pool.ntp.org";
+static ip_addr_t s_dhcp[SNTP_MAX_SERVERS];
+static unsigned s_dhcp_count;
+static int64_t s_retry_at_us;
 
 static void on_sync_time(struct timeval *tv)
 {
-    s_synced = true;
-    s_synced_at_s = (int64_t)tv->tv_sec;
-    ESP_LOGI(TAG, "SNTP time synchronized");
+    (void)tv;
+    clock_health_sync(&s_health, esp_timer_get_time());
+    ESP_LOGI(TAG, "SNTP synchronized (%s)", s_name);
 }
 
-/* Apply the built-in fallback servers (used when neither manual nor DHCP). */
-static void apply_fallback_servers(void)
+static void select_source(source_t source)
 {
-    esp_sntp_setservername(0, "pool.ntp.org");
-    esp_sntp_setservername(1, "time.google.com");
-    strncpy(s_server0, "pool.ntp.org", sizeof s_server0 - 1);
-    s_dhcp_active = false;
-    ESP_LOGI(TAG, "SNTP servers: fallback pool.ntp.org");
-}
-
-static void apply_servers(void)
-{
-    if (s_manual) {
-        /* Manual override wins. DHCP list is bypassed (sntp_servermode_dhcp
-         * disabled below so it cannot overwrite the manual entry). */
-        sntp_servermode_dhcp(0);
-        esp_sntp_setservername(0, s_server0);
-        ESP_LOGI(TAG, "SNTP servers: manual %s", s_server0);
-        s_dhcp_active = false;
-        return;
-    }
-    /* DHCP mode: lwIP writes option-42 server IPs straight into the sntp
-     * server table when the lease arrives. Set the fallback names here so
-     * they exist until/unless DHCP overrides them, but NEVER re-apply them
-     * after the lease (that would clobber the DHCP-provided addresses). */
-    sntp_servermode_dhcp(1);
-    esp_sntp_setservername(0, "pool.ntp.org");
-    esp_sntp_setservername(1, "time.google.com");
-    strncpy(s_server0, "pool.ntp.org", sizeof s_server0 - 1);
-    s_dhcp_active = true;
-    ESP_LOGI(TAG, "SNTP servers: DHCP option 42 (fallback pool.ntp.org)");
-}
-
-static void sntp_reconfigure(void)
-{
-    if (!s_started) return;
-    /* Restart SNTP so it picks up whatever is in the server table now. For
-     * DHCP mode this must happen WITHOUT re-applying fallback names, which
-     * would overwrite the addresses lwIP stored from option 42. */
-    esp_sntp_stop();
-    if (s_manual) {
-        sntp_servermode_dhcp(0);
-        esp_sntp_setservername(0, s_server0);
+    sntp_stop();
+    s_source = source;
+    clock_health_select(&s_health, esp_timer_get_time());
+    for (unsigned i = 0; i < SNTP_MAX_SERVERS; ++i) sntp_setserver(i, NULL);
+    if (source == SOURCE_MANUAL) {
+        snprintf(s_name, sizeof s_name, "%s", s_manual_name);
+        sntp_setservername(0, s_name);
+    } else if (source == SOURCE_CONFIG) {
+        snprintf(s_name, sizeof s_name, "%s", s_config_name);
+        sntp_setservername(0, s_name);
+    } else if (source == SOURCE_DHCP) {
+        for (unsigned i = 0; i < s_dhcp_count; ++i) sntp_setserver(i, &s_dhcp[i]);
+        ipaddr_ntoa_r(&s_dhcp[0], s_name, sizeof s_name);
     } else {
-        sntp_servermode_dhcp(1);
+        snprintf(s_name, sizeof s_name, "pool.ntp.org");
+        sntp_setservername(0, s_name);
+        /* Stay within the configured server-table size. */
+#if SNTP_MAX_SERVERS > 1
+        sntp_setservername(1, "time.google.com");
+#endif
+        s_retry_at_us = esp_timer_get_time() + CLOCK_DHCP_RETRY_US;
     }
-    esp_sntp_init();
+    if (s_online) sntp_init();
+    ESP_LOGI(TAG, "SNTP source: %s (%s)", source == SOURCE_MANUAL ? "manual" :
+             source == SOURCE_CONFIG ? "config" : source == SOURCE_DHCP ? "dhcp" : "fallback", s_name);
 }
 
-void sntp_mgr_start(void)
+static void select_preferred(void)
 {
-    if (s_started) return;
-    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_set_time_sync_notification_cb(on_sync_time);
-    apply_servers();
-    esp_sntp_init();
-    s_started = true;
-    ESP_LOGI(TAG, "SNTP started");
+    select_source(s_manual ? SOURCE_MANUAL : s_config ? SOURCE_CONFIG :
+                  s_dhcp_count ? SOURCE_DHCP : SOURCE_FALLBACK);
 }
 
-static void sntp_dhcp_check_task(void *arg)
+/* Linker wrapper of lwIP's DHCP option-42 receiver. Cache the lease's list
+ * even under a manual override; never let DHCP overwrite the active table.
+ * DHCP calls this for every ACK, including num==0 (option absent). Processing
+ * is deferred until after ACK/bind, so renewal needs no GOT_IP event. */
+void __wrap_dhcp_set_ntp_servers(uint8_t num, const ip4_addr_t *servers)
+{
+    unsigned count = num < SNTP_MAX_SERVERS ? num : SNTP_MAX_SERVERS;
+    bool changed = count != s_dhcp_count;
+    for (unsigned i = 0; i < count; ++i) {
+        ip_addr_t addr;
+        ip_addr_copy_from_ip4(addr, servers[i]);
+        if (!ip_addr_cmp(&addr, &s_dhcp[i])) changed = true;
+        s_dhcp[i] = addr;
+    }
+    s_dhcp_count = count;
+    s_dhcp_dirty |= changed;
+}
+
+static void policy_tick(void *arg)
 {
     (void)arg;
-    /* Give the DHCP lease a moment to be fully processed (the NTP option 42
-     * servers are written by lwIP after the IP event). */
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    for (int i = 0; i < SNTP_MAX_SERVERS; i++) {
-        const ip_addr_t *addr = esp_sntp_getserver(i);
-        if (addr && !ip_addr_isany(addr)) {
-            char ipbuf[16];
-            ip4addr_ntoa_r(ip_2_ip4(addr), ipbuf, sizeof ipbuf);
-            ESP_LOGI(TAG, "DHCP check: sntp server[%d] = %s", i, ipbuf);
+    int64_t now = esp_timer_get_time();
+    if (s_online && !s_manual && !s_config) {
+        if (s_dhcp_dirty) {
+            select_preferred();
+        } else if (s_source == SOURCE_DHCP && clock_health_dhcp_failed(&s_health, now)) {
+            select_source(SOURCE_FALLBACK);
+        } else if (s_source == SOURCE_FALLBACK && s_dhcp_count && now >= s_retry_at_us) {
+            select_source(SOURCE_DHCP);
         }
     }
-    /* If a DHCP-provided server never syncs, fall back to the public pool so
-     * a misconfigured option 42 (e.g. pointing at a host without an NTP
-     * daemon) cannot leave us without time. */
-    vTaskDelay(pdMS_TO_TICKS(15000));
-    if (!s_manual && esp_sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
-        ESP_LOGW(TAG, "DHCP NTP server not syncing; falling back to pool.ntp.org");
-        sntp_servermode_dhcp(0);
-        esp_sntp_setservername(0, "pool.ntp.org");
-        esp_sntp_setservername(1, "time.google.com");
-        strncpy(s_server0, "pool.ntp.org", sizeof s_server0 - 1);
-        s_dhcp_active = false;
-        esp_sntp_stop();
-        esp_sntp_init();
-    }
-    vTaskDelete(NULL);
+    s_dhcp_dirty = false;
+    sys_timeout(1000, policy_tick, NULL);
 }
 
-void sntp_mgr_wifi_connected(void)
+static void start_core(void *arg)
 {
-    /* Re-apply server selection now that the network (and DHCP info) exists.
-     * Manual override survives; otherwise DHCP servers take over. */
-    sntp_reconfigure();
-    xTaskCreate(sntp_dhcp_check_task, "sntp_dhcp", 3072, NULL, 5, NULL);
+    (void)arg;
+    if (s_started) return;
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_set_time_sync_notification_cb(on_sync_time);
+    s_started = true;
+    select_preferred();
+    sys_timeout(1000, policy_tick, NULL);
 }
 
+static void run_core(tcpip_callback_fn fn, void *arg)
+{
+    /* Wait for completion: stack arguments remain valid and CLI commands are
+     * ordered with sync callbacks, DHCP updates and status snapshots. */
+    ESP_ERROR_CHECK(tcpip_callback_wait(fn, arg) == ERR_OK ? ESP_OK : ESP_FAIL);
+}
+
+void sntp_mgr_start(void) { run_core(start_core, NULL); }
+
+static void network_core(void *arg)
+{
+    bool online = *(bool *)arg;
+    if (!s_started) return;
+    if (!online) {
+        s_online = false;
+        sntp_stop();
+        s_dhcp_count = 0;  /* never carry an old AP's option 42 to another AP */
+        s_dhcp_dirty = false;
+        s_health.source_synced = false;
+    } else {
+        s_online = true;
+        s_dhcp_dirty = false;
+        select_preferred();
+    }
+}
+void sntp_mgr_wifi_connected(void) { bool up = true; run_core(network_core, &up); }
+void sntp_mgr_wifi_disconnected(void) { bool up = false; run_core(network_core, &up); }
+
+static void manual_core(void *arg)
+{
+    s_manual = true;
+    snprintf(s_manual_name, sizeof s_manual_name, "%s", (const char *)arg);
+    select_preferred();
+}
 bool sntp_mgr_set_server(const char *server)
 {
-    if (!server || !*server || strlen(server) >= sizeof s_server0) return false;
-    strncpy(s_server0, server, sizeof s_server0 - 1);
-    s_manual = true;
-    sntp_reconfigure();
-    ESP_LOGI(TAG, "SNTP manual server: %s", server);
+    if (!server || !*server || strlen(server) >= sizeof s_manual_name) return false;
+    run_core(manual_core, (void *)server);
     return true;
 }
-
-void sntp_mgr_reset_servers(void)
+static void config_core(void *arg)
 {
+    const char *server = arg;
+    bool enabled = server && *server;
+    if (enabled == s_config && (!enabled || !strcmp(server, s_config_name))) return;
+    s_config = enabled;
+    if (enabled) snprintf(s_config_name, sizeof s_config_name, "%s", server);
+    else s_config_name[0] = 0;
+    if (!s_manual) select_preferred();
+}
+void sntp_mgr_set_config_server(const char *server)
+{
+    run_core(config_core, (void *)server);
+}
+static void reset_core(void *arg)
+{
+    (void)arg;
     s_manual = false;
-    sntp_reconfigure();
+    select_preferred();
 }
-
-void sntp_mgr_resync(void)
+void sntp_mgr_reset_servers(void) { run_core(reset_core, NULL); }
+static void resync_core(void *arg)
 {
-    if (!s_started) return;
-    s_synced = false;
-    esp_sntp_stop();
-    esp_sntp_init();
-    ESP_LOGI(TAG, "SNTP resync requested");
+    (void)arg;
+    select_source(s_source); /* preserves last good sync and monotonic age */
 }
+void sntp_mgr_resync(void) { run_core(resync_core, NULL); }
 
-/* Update s_server0_ip to reflect the actually-configured server (DHCP writes
- * IPs directly via dhcp_set_ntp_servers). */
-static void refresh_actual_server(char *out_ip, size_t out_sz)
+static void status_core(void *arg)
 {
-    const ip_addr_t *addr = esp_sntp_getserver(0);
-    if (addr && !ip_addr_isany(addr)) {
-        ip4addr_ntoa_r(ip_2_ip4(addr), out_ip, out_sz);
-    } else {
-        strncpy(out_ip, "0.0.0.0", out_sz - 1);
-    }
+    sntp_mgr_status_t *st = arg;
+    memset(st, 0, sizeof *st);
+    int64_t now = esp_timer_get_time();
+    st->started = s_started;
+    st->synced = s_health.ever_synced;
+    st->time_trusted = clock_health_trusted(&s_health, now);
+    st->fresh = s_online && clock_health_fresh(&s_health, now);
+    st->ntp_age_s = clock_health_age(&s_health, now);
+    st->using_manual = s_source == SOURCE_MANUAL;
+    st->using_dhcp = s_source == SOURCE_DHCP;
+    st->using_config = s_source == SOURCE_CONFIG;
+    snprintf(st->server0, sizeof st->server0, "%s", s_name);
+    ipaddr_ntoa_r(sntp_getserver(0), st->server0_ip, sizeof st->server0_ip);
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    st->unix_sec = tv.tv_sec;
+    st->unix_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
-
 sntp_mgr_status_t sntp_mgr_status(void)
 {
     sntp_mgr_status_t st;
-    memset(&st, 0, sizeof st);
-    st.started = s_started;
-    /* The notification callback can be reset by esp_sntp_stop(); query the
-     * lwIP sync status directly as the source of truth. */
-    st.synced = (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) || s_synced;
-    st.using_manual = s_manual;
-    st.using_dhcp = s_dhcp_active;
-    strncpy(st.server0, s_server0, sizeof st.server0 - 1);
-    refresh_actual_server(st.server0_ip, sizeof st.server0_ip);
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    st.unix_sec = (int64_t)tv.tv_sec;
-    st.ntp_age_s = s_synced && s_synced_at_s > 0
-                       ? (uint32_t)(st.unix_sec - s_synced_at_s)
-                       : 0;
+    run_core(status_core, &st);
     return st;
 }

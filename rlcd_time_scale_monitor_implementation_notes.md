@@ -1,6 +1,10 @@
 # RLCD Time Scale Monitor — Implementation Notes
 
-Design reference for a Waveshare ESP32-S3 RLCD 4.2 board acting as an NTP/RTC-based time-scale instrument. 400×300 reflective monochrome display showing ISO-8601 civil time, UTC, TAI-based MJD, GPS Week/TOW, sync state, temperature/humidity, battery and Wi-Fi status.
+Design reference for a Waveshare ESP32-S3 RLCD 4.2 time-scale instrument. It
+currently uses Wi-Fi SNTP with bounded ESP32 system-clock holdover; PCF85063
+RTC integration is planned. The 400×300 reflective monochrome display shows
+ISO-8601 civil time, UTC, TAI-based MJD, GPS Week/TOW, sync state,
+temperature/humidity, battery and Wi-Fi status.
 
 ---
 
@@ -23,7 +27,12 @@ battery ADC = ADC1_CH3 (GPIO4, divider ×3).
 
 ### RTC battery strategy and unsafe time state
 
-No RTC backup battery is installed. This is acceptable: main power comes from the 18650, and Wi-Fi/SNTP can re-acquire trusted time after boot. However, when the 18650 is removed / low-voltage cutoff / long-term depleted, the PCF85063 may lose time. Firmware must have an explicit unsafe time state to avoid showing seemingly precise MJDTAI / GPS values before sync.
+During the original bring-up no RTC backup battery was installed; its current
+physical state has not been rechecked. Main power comes from the 18650, and
+Wi-Fi/SNTP can re-acquire trusted time after boot. Without backup power, a
+removed or depleted 18650 would also let the PCF85063 lose time. Firmware
+therefore masks precise MJDTAI/GPS values until a trusted sync; reading the
+PCF85063 itself remains future work.
 
 Sync state codes:
 
@@ -32,10 +41,12 @@ BOOT UNS   booted, trusted time not yet acquired
 SYNC...    syncing
 NTP OK     SNTP/NTP synced, time trusted
 RTC HOLD   relying on RTC or system clock holdover
-WIFI LOST  Wi-Fi down
+WIFI LOST  Wi-Fi down, still within trusted system-clock holdover
+TIME UNS   last successful sync is too old (24 h)
 ```
 
-When unsynced, show placeholders — never fake-precise values:
+When unsynced or trust has expired, mask local date/time, UTC, ISO week,
+MJDTAI and GPS — never fake-precise values:
 
 ```text
 TIME   UNSYNC
@@ -133,7 +144,8 @@ ISO 2026-W25-7
 
 All time-scale telemetry lives on a single 400×300 face. There is no page
 switching and no dense/system page — the screen is roomy enough to hold
-everything at once. Debug/config goes over the Serial console.
+everything at once. Debug/config uses the Serial console and the HTTP file
+manager (§8.6).
 
 ```text
 ┌────────────────────────────────────────┐
@@ -159,22 +171,31 @@ telemetry shows real sensor values. Verified on hardware: `[tmp] +31.7C  [rh] 53
 
 ### 4.1 Trust gating
 
-When `time_trusted` is false (boot unsynced / holdover lost), MJDTAI and GPS
-fields show placeholders (`--------.-------`, `W---- TOW------`) rather than
-fake-precise values. The top-bar sync state code (`BOOT UNS` / `SYNC...` /
-`NTP OK` / `RTC HOLD` / `WIFI LOST`) is the single source of trust; there is
-no separate RTC-holdover indicator, `RTC HOLD` in the top bar already conveys it.
+When `time_trusted` is false, all date/time fields are masked: `TIME UNSYNC`,
+`--:--:--`, UTC/ISO placeholders, `--------.-------`, and `W---- TOW------`.
+The SNTP callback records the last successful sync using monotonic time;
+reading status does not consume a sync event. Current policy constants live
+in `common/clock_health.h`: recent sync <2 h, trusted holdover <24 h. These
+limits are product policy, not an accuracy guarantee.
+
+`NTP OK` requires the current source to have synced recently and the network
+to be up. Otherwise trusted system time shows `RTC HOLD` (network up) or
+`WIFI LOST` (network down). At 24 h it becomes `TIME UNS` and fields are
+masked. `RTC HOLD` currently means ESP32 system-clock holdover; PCF85063 is
+still unimplemented. Manual resync/server changes preserve last-good trust
+while waiting for the new source. Cold boot remains unsafe until first sync.
+ISO week uses the UTC date; the top-bar civil date uses the local offset.
 
 ### 4.2 Button behavior
 
-Buttons are limited; complex operations go through the Serial console. With
-the single-face design the on-device keys cover only the two functions that
-need to be reachable without a serial terminal:
+The following button behavior is planned, not implemented. Configuration
+versions can already be managed over HTTP; diagnostics also use the Serial
+console. With the single-face design, the on-device keys are reserved for:
 
 - **short press**: dismiss a currently ringing alarm (snooze/disable)
 - **long press**: force NTP resync
 
-Everything else (config, alarm schedule editing, debug) is Serial-only.
+Alarm scheduling and button handling have not been implemented.
 
 ---
 
@@ -205,7 +226,7 @@ Icons: Wi-Fi bars, NTP/sync, RTC/crystal, battery, thermometer, droplet, SD, war
 
 ## 6. Graphics stack decisions
 
-- **No LVGL**: no touch, no complex on-device UI, no widget/theme/animation needs, settings/debug go over Serial, the screen is a fixed/semi-fixed instrument panel. LVGL's object tree, style system and event routing would be mostly overhead.
+- **No LVGL**: no touch, no complex on-device UI, no widget/theme/animation needs; settings/debug use Serial and HTTP, while the screen is a fixed instrument panel. LVGL's object tree, style system and event routing would be mostly overhead.
 - **u8g2 is the only drawing engine**: monochrome, fixed-coordinate layout, multi-font, glyph/icon font, full-buffer rendering. Only `sendBuffer()` differs: host = SDL3, target = ST7305 SPI flush.
 - **No parallel SDL renderer**: do not write separate `CanvasSDL3` / `CanvasU8g2` drawText/drawGlyph implementations — they diverge on font metrics, baseline, glyph advance, icon alignment and host-vs-target screenshots. Host and target run the same u8g2 draw calls.
 
@@ -254,25 +275,33 @@ Target firmware is built with **ESP-IDF v6.0.2** (FreeRTOS underneath, picolibc 
 
 Two IDF-specific gotchas discovered during bring-up (see AGENTS.md):
 
-- The board's only host-facing serial port is the **USB-Serial/JTAG** controller (`/dev/ttyACM1`), not UART0. Console must use `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, and the CLI must call `linenoiseSetDumbMode(1)` — linenoise's escape-sequence probe hangs the USB-serial VFS otherwise.
-- picolibc's `struct tm` has no `tm_gmtoff`, so the host's TZ readout cannot be reused on target; TZ is a CLI-configurable value instead (see §8.4).
+- The board's only host-facing serial port is the **USB-Serial/JTAG** controller, not UART0. The path was `/dev/ttyACM0` during 2026-09-23 testing, but can change; discover it via `/dev/serial/by-id`. Console must use `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`, and the CLI must call `linenoiseSetDumbMode(1)` — linenoise's escape-sequence probe hangs the USB-serial VFS otherwise.
+- picolibc's `struct tm` has no `tm_gmtoff`, so the host's TZ readout cannot be reused on target; TZ comes from the selected config or a RAM-only CLI override (see §8.4).
 
-### 8.2 FreeRTOS tasks
+### 8.2 Firmware subsystems and tasks
 
 ```text
-display_task    1 Hz: render shared face → invert → ST7305 flush   [implemented]
+display_task    1 Hz: render shared face → ST7305 flush (ink inversion in backend) [implemented]
 wifi_mgr        event-driven STA connect/disconnect; auto-reconnect  [implemented]
-sntp_mgr        esp_sntp; priority CLI > SD config > DHCP option-42 > pool [implemented]
-http_srv        esp_http_server: / /status /snapshot.pbm /snapshot.bmp [implemented]
+sntp_mgr        lwIP SNTP; CLI > selected SD/flash config > DHCP > pool [implemented]
+storage/config  SD + internal FAT, version selection and TZ/NTP application [implemented]
+http_srv        esp_http_server: homepage, files API, status, snapshots [implemented]
 sensor frontend SHTC3 + battery ADC, read on each display frame     [implemented]
 CLI             linenoise REPL over USB-Serial/JTAG console          [implemented]
 alarm_task      compare local time against SD-loaded alarm schedule; trigger audio on match  [future]
 button_task     debounce; short press = dismiss ringing alarm, long press = force resync     [future]
 ```
 
-`app_main` initializes subsystems, then the CLI REPL blocks (commands run in
-the console task). The display task is the only periodic renderer; SNTP,
-Wi-Fi and HTTP are event/task-driven.
+`app_main` initializes subsystems, mounts storage and selects a config, then
+the CLI REPL blocks (commands run in the console task). The display task is
+the only periodic renderer; SNTP, Wi-Fi and HTTP are event/task-driven. The
+HTTP file API uses a separate storage worker. SNTP policy, DHCP capture, sync
+callbacks and status snapshots are serialized on lwIP tcpip_thread. A linker
+wrapper captures `dhcp_set_ntp_servers` (including option-42 removal) without
+allowing DHCP to overwrite the active manual/fallback table. Wi-Fi retries
+use event-loop commands and a periodic timer, with 1–30 s capped backoff;
+manual disconnect cancels retries. `wifi reconnect` forces a link drop through
+the same recovery path without re-entering RAM credentials.
 
 ### 8.3 ClockModel snapshot
 
@@ -282,7 +311,7 @@ The model is the shared `clock_model_t` (common/time_model.h, verbatim on both p
 typedef struct {
     int64_t  unix_ms;
     bool     time_trusted;
-    sync_state_t sync;        /* SYNC_BOOT_UNS / SYNC_SYNCING / SYNC_NTP_OK / SYNC_RTC_HOLD / SYNC_WIFI_LOST */
+    sync_state_t sync;        /* SYNC_BOOT_UNS / SYNC_SYNCING / SYNC_NTP_OK / SYNC_RTC_HOLD / SYNC_WIFI_LOST / SYNC_TIME_UNSAFE */
     uint32_t ntp_age_s;
     int      wifi_rssi_dbm;
     float    temp_c, rh_pct, batt_v;
@@ -292,7 +321,7 @@ typedef struct {
 The display framebuffer is protected by a mutex; both the periodic display task
 and the HTTP snapshot handler render through it:
 
-`xSemaphoreTake` → `time_model_now(&m)` (device glue fills from SNTP + Wi-Fi + sensors) → `render_face(g, &m)` → `xSemaphoreGive` (display task additionally flushes). The renderer switches MJDTAI/GPS to placeholders based on `time_trusted` (see §1). `alarm_ringing` from the original design is not yet in the struct — the alarm feature is unbuilt.
+`xSemaphoreTake` → `time_model_now(&m)` (device glue fills from SNTP + Wi-Fi + sensors) → `render_face(g, &m)` → `xSemaphoreGive` (display task additionally flushes). The renderer switches all date/time fields to placeholders based on `time_trusted` (see §1). `alarm_ringing` from the original design is not yet in the struct — the alarm feature is unbuilt.
 
 ### 8.4 Serial console
 
@@ -301,29 +330,37 @@ prompt). Implemented commands:
 
 ```text
 wifi connect "<ssid>" [password]   connect STA (quoted args; not persisted)
-wifi status | wifi disconnect
+wifi status | wifi disconnect | wifi reconnect
 ntp status | ntp server <host|ip> | ntp reset | ntp resync
 tz [±HH:MM | ±HHMM | minutes | reset]      show/set local offset (default UTC+8)
+config status | config reload               inspect/reselect SD/flash config
 sensor                                   read SHTC3 + battery ADC live
-http status                              list debug endpoints
+sd status | mount | unmount | ls [dir] | cat <file> | test | format
+flash status | mount | init
+http status                              list snapshot/debug endpoints
 help
 ```
 
 **NTP server selection** (priority order): manual `ntp server` CLI override >
-SD config JSON (milestone 8: `ntp_server` key) > DHCP option 42
+selected config JSON `ntp_server` key (SD first, then internal flash) > DHCP option 42
 (`CONFIG_LWIP_DHCP_GET_NTP_SRV`) > pool.ntp.org fallback.
-`ntp status` shows `server_name` (configured) vs `server_ip` (address actually
-in use — lwIP stores DHCP servers as IPs). A watchdog reverts to the public
-pool if a DHCP-provided server fails to sync within ~18 s (a DHCP option-42
-address pointing at a host without an NTP daemon must not strand the clock).
-The SD-config layer only exists once milestone 8 lands; until then the order
-is CLI > DHCP option 42 > pool (as verified on hardware).
+`ntp status` shows the selected source/address, `synced` (ever synced this
+boot), `trusted`, `fresh`, and monotonic `age`. `/status` exposes these fields
+and a `display_frames` counter incremented only after actual panel flushes.
+DHCP servers are cached independently of the active SNTP table, so `ntp
+reset` immediately restores config, DHCP or the pool, including after a manual
+server change. An 18 s unsuccessful DHCP trial falls back to the pool; every
+5 minutes the cached DHCP source is retried. A DHCP source that stops syncing
+for 2 h also falls back. DHCP changes/removal on lease renewal are applied
+without requiring a new GOT_IP event. Current sdkconfig has one SNTP slot;
+a second fallback name is only installed when the configured capacity allows.
+Only a selected config with an `ntp_server` key takes precedence over DHCP.
 
-**TZ**: offset is a CLI-set value (default UTC+8), not read from the host OS —
-see §8.1 (picolibc has no `tm_gmtoff`). Not persisted yet; SD config comes
-with milestone 8.
+**TZ**: the selected config supplies `tz_offset_minutes` (default +480), not
+the host OS — see §8.1 (picolibc has no `tm_gmtoff`). A CLI override is
+RAM-only; `tz reset` returns to the selected config value.
 
-Future commands from the original design (RTC read/write, SD config, alarm
+Future commands from the original design (RTC read/write, alarm
 schedule) are not yet implemented.
 
 ### 8.5 HTTP debug snapshot
@@ -334,77 +371,144 @@ Read-only HTTP endpoint on the same Wi-Fi the instrument uses for SNTP; renders 
 | --------------------- | -------------------------------- | ------------------------------------------------------------------------------------ |
 | `GET /snapshot.pbm` | `image/x-portable-bitmap` (P4) | Canonical raw framebuffer; diff against host PBM for pixel-exact host↔target parity |
 | `GET /snapshot.bmp` | 1-bit BMP (top-down)             | Browser-friendly view (`<img>` / double-click)                                     |
-| `GET /`             | HTML page                        | Inline`<img src=/snapshot.bmp>` + auto-refresh for a live-ish preview from a phone |
+| `GET /`             | English HTML page                | Styled live display preview, refreshed from `/snapshot.bmp`, with a link to `/files` |
 
 Design rules:
 
 - **Shared encoder**: `frame_export.{h,c}` (pure C, no SDL/hardware deps) converts the u8g2 vertical_top_lsb buffer to P4 PBM and 1-bit BMP, byte-for-byte identical on host and target. PBM: P4, `400 300`, MSB-first, row-major, 1 = ink. BMP: 1-bit, top-down (`biHeight` negative), palette {white, black}, rows padded to 4 bytes.
 - **Fresh frame**: the handler locks the display framebuffer, renders the face, encodes, unlocks — never exposes a half-drawn frame.
 - **Layout translation on target**: the ST7305's u8g2 buffer lives in the panel's native orientation (304-wide × 400-tall, U8G2_R1 rotation), while the face is drawn in logical 400×300 landscape. `snapshot.c` re-maps the physical buffer back to the host's 400×300 layout before encoding, so target exports stay byte-comparable with the host.
-- **Read-only by construction**: no query params, no config mutation, no auth. It is a debug surface on the user's LAN, nothing more — do not extend it into a control/API endpoint. Config upload is a separate, SD-backed endpoint (§8.6), not a query-param on this one.
+- **Read-only snapshot by construction**: no query params or config mutation. The separate, volume-aware file API (§8.6) handles writes; snapshot routes remain read-only.
 - Serves only when Wi-Fi is up (STA); not required for instrument function.
 
-### 8.6 SD config upload (milestone 8)
+### 8.6 Storage and HTTP file access (milestone 8)
 
-How config files (TZ offset, TAI/GPS offset overrides, alarm times,
-`ntp_server`) and alarm sound samples get onto the SD card, and how the JSON
-config format is iterated during alarm development.
+Versioned config files and sound samples live on SD or internal flash and are
+managed through the same HTTP file API. TZ and NTP keys are applied today;
+TAI/GPS offset overrides and alarms are planned.
 
-**Transport decision: REST `/fs/` API, not WebDAV.**
+**Implemented SD foundation (2026-09-23)**: `storage_mgr.c` mounts FAT at
+`/sdcard` using 1-bit SDMMC, CLK=38 CMD=21 D0=39, 20 MHz (vendor
+`06_SD_Card` wiring). Mount failure is nonfatal and never formats the card.
+Long filenames and media status checks are enabled. `sd status` reports
+card/filesystem/cluster/space information; `sd ls [dir]` lists a directory;
+`sd cat <file>` previews at most 4096 bytes. Paths are relative to `/sdcard`.
+`sd test` exclusively creates a temporary file and verifies a 4096-byte
+write/fsync/close/reopen/read round trip, then removes it. `sd unmount` and
+`sd mount` support deliberate removal/reinsertion; automatic hotplug is not
+implemented. All diagnostic operations share one storage mutex.
 
-- WebDAV's only real value is OS-native mounting (Windows Explorer "Map
-  network drive", macOS Finder, davfs2). The actual workflow here is
-  curl / Python: `curl -T file URL` is a plain PUT — WebDAV adds nothing
-  for it, only PROPFIND XML, LOCK semantics and RFC 4918 compliance cost.
-- ESP-IDF would support WebDAV if we ever wanted it: `http_parser` (bundled
-  component) already parses PROPFIND/LOCK/MKCOL/COPY/MOVE/UNLOCK/etc.,
-  `esp_http_server` has an `HTTP_ANY` wildcard method for routing them, and
-  `esp_vfs_fat_sdmmc_mount()` gives POSIX file I/O on the card. Platform is
-  not the obstacle — the protocol's own verbosity is. So a future WebDAV
-  layer can be added on top without changing the architecture.
+Hardware verification: SK32G SDHC, FAT32, 16 KiB clusters, 31,898,320,896
+data bytes with 31,898,304,512 bytes free. Two 4096-byte self-tests passed;
+temporary files were removed and free space was unchanged after unmount/remount.
+Unmounted access and `../` paths were rejected. The originally empty test card
+was later explicitly reformatted with `sd format` as authorized by the user;
+ordinary mounts still never format a card.
 
-API (all under `/fs/`):
+**Transport selected: HTTP web page + API (2026-09-23).**
 
-| Method   | Path               | Effect                                            |
-| -------- | ------------------ | ------------------------------------------------- |
-| `PUT`    | `/fs/config.json`  | Upload/overwrite a config file (raw body → FATFS) |
-| `GET`    | `/fs/config.json`  | Download a file (verify writes, backup)           |
-| `DELETE` | `/fs/config.json`  | Remove a file                                     |
-| `GET`    | `/fs/`             | List files (JSON)                                 |
+`GET /files` serves an English, responsive file manager: Flash/SD selection,
+space readout, root/config/sounds browsing, multi-file selection/drop uploads,
+download/delete, and versioned JSON editing. The clock preview at `/` links
+to it and shares its stylesheet. TZ and NTP settings apply from the selected
+config; WAV files are stored but not yet played.
+FTP is not implemented.
 
-Workflow: edit locally → `curl -T config.json http://<ip>/fs/config.json`
-(or a Python helper) → device re-reads → observe alarm behavior → GET back to
-verify. Fixed whitelist of known filenames (`config.json`, `alarms.json`,
-`sounds/*.wav`), no arbitrary URL path parsing → no path traversal, and no
-need for an auth scheme beyond the existing LAN-debug trust boundary (§8.5).
+Internal storage is an 8 MiB `data,fat` partition mounted at `/flash`, using
+ESP-IDF wear levelling with 4096-byte sectors. The factory app is now 4 MiB.
+Both normal SD and flash mounts disable auto-formatting. Explicit `flash init`
+initializes an unmountable internal volume; explicit `sd format` erases and
+reformats the SD volume with 16 KiB clusters. Neither operation is exposed
+through HTTP. Unmount/format and HTTP file IO share the same storage mutex.
 
-Implementation notes:
+| Method | Path | Effect |
+| --- | --- | --- |
+| GET | `/fs/` | Volumes (`flash`, `sd`), mount status, total/free data bytes |
+| GET | `/fs/active` | Selected config volume/path and configured TZ/NTP values (CLI overrides are separate) |
+| GET | `/fs/<volume>/` | Virtual config and sounds directories |
+| GET | `/fs/<volume>/config/` | JSON config versions (latest 256 names) |
+| GET | `/fs/<volume>/sounds/` | WAV listing (at most 256 entries) |
+| GET | `/fs/<volume>/<file>` | Stream a download |
+| PUT | `/fs/<volume>/<file>` | Stream and validate a file; config versions require a new name |
+| DELETE | `/fs/<volume>/<file>` | Delete one managed file; no recursive deletion |
 
-- Upload is the inverse of the §8.5 fopencookie pattern: `httpd_req_recv()`
-  loop → write to the mounted FATFS file. No fopencookie needed for input.
-- Write to a temp file then rename for atomic replace, so a half-written
-  config can never be parsed as valid.
-- Milestone 8 also brings the SD mount (`esp_vfs_fat_sdmmc_mount`) and the
-  config parser; the endpoint itself is deliberately dumb (file in / file
-  out), all semantics live in the parser.
+Managed files: `config/<ASCII name>.json` (JSON object, <=16 KiB and nesting
+<=16) and `sounds/<ASCII name>.wav` (RIFF/WAVE header and matching container
+length, <=16 MiB). WAV validation does not imply codec/playback support;
+FLAC uploads and decoding are not implemented.
+File names may contain letters, digits, spaces, underscore, hyphen and dot;
+sound names cannot start with dot/space. URI decoding rejects encoded NUL,
+separators, traversal, drive prefixes, aliases and private transaction paths.
+The API uses canonical case, accepts percent-encoded spaces and no query params.
+
+Requests exceeding limits return 413, invalid JSON/WAVE 422, existing config
+version 409, missing file 404,
+unmounted/busy storage 503, insufficient free space 507. Uploads require
+Content-Length; no chunked request uploads, multipart, Range or resume API.
+A 4 KiB buffer bounds transfer memory. The async worker serializes file IO
+with one additional request slot; uploads/downloads have a 120 s deadline.
+The main HTTP task continues serving clock status and snapshots during transfers.
+
+Recoverable replacement uses a reserved `.rlcd-txn` directory per volume:
+write/fsync the target journal; stream/fsync/close the upload; validate;
+rename old target to backup; rename upload to target; remove backup and
+journal. Recovery restores a backup if the target is absent, or retains the
+new target if already published; partial uploads are discarded. Journal
+removal is last. Invalid or foreign journal state is not deleted automatically.
+This is recovery from interrupted operations, not a guarantee against FAT
+metadata corruption during power loss. The SD card is never formatted by
+ordinary mount failure.
+
+At boot and after a config upload/delete or volume mount change, filenames in
+`config/` are sorted descending. The first readable, valid SD file is selected;
+if none exists, internal flash is searched the same way. This preserves older
+versions and falls back on corrupt or semantically invalid newer files. If
+both volumes have no usable version, TZ defaults to UTC+8 and NTP uses
+DHCP/pool. The currently supported JSON keys are integer
+`tz_offset_minutes` (-840..840, default 480) and optional `ntp_server`
+(hostname/IP). Unknown keys are ignored for forward compatibility; alarm and
+time-scale offset application remain future work. The web editor creates a
+new sortable UTC timestamp filename on save and retains the source version.
+
+Hardware and browser validation (2026-09-23): explicit `sd format` produced
+FAT32 with 16 KiB clusters; `flash init` mounted a wear-levelled FAT volume
+with 8,278,016 usable bytes. Exact JSON round trips and 1 MiB WAV SHA-256
+comparisons passed on both volumes. Invalid JSON/WAV and interrupted uploads
+left the previous config intact; malformed paths, 16 KiB JSON limit, 507
+capacity guard, 503 transfer queue guard, and SD-unmount isolation were
+verified over HTTP. A slow WAV upload left `/snapshot.bmp` responsive in
+0.296 s and the actual panel frame counter increased. Chrome rendering,
+volume switching, directory browsing and JSON editing were exercised. After
+reflashing/rebooting, test JSON and WAV bytes persisted on both volumes;
+those transfer-test files were then deleted. Later config-version selection
+and source precedence were verified on hardware, including HTTP 409/422, CLI overrides and SD
+unmount/remount fallback. The browser editor created a new version and left
+older files in place. A subsequent cold boot selected that latest SD version
+before Wi-Fi was connected. Deleting only the test versions stepped through
+older SD files, then internal flash, then UTC+8 defaults; the test versions
+were removed afterward. Host CTest passed 7/7.
 
 ---
 
 ## 9. Project layout
 
 ```text
-rlcd-time-scale-monitor/
+ESP32-RLCD/
   AGENTS.md             environment + bring-up notes
-  common/               shared pure-C render path (compiled verbatim by both)
-    time_model.{h,c} render_faces.{h,c} frame_export.{h,c} display_geometry.h
-  host/                 SDL3 simulator (build: cmake -S host -B build)
+  common/               shared pure-C render, clock and storage code
+    time_model.{h,c} render_faces.{h,c} frame_export.{h,c}
+    clock_health.{h,c} storage_files.{h,c} display_geometry.h
+  host/                 SDL3 simulator (build: cmake -S host -B host/build)
     src/                host-only platform code: main.c, host_time.c,
                         sdl3_backend.{h,c}, u8g2_selected_fonts.c
-    tests/              test_time_model.c, test_frame_export.c
-  firmware/             ESP-IDF bring-up project (idf.py -p /dev/ttyACM1 flash)
+    tests/              seven host tests, including fake-IDF network and config cases
+  firmware/             ESP-IDF target (idf.py -p <detected-port> build flash)
     main/               app_main.c, cli.c, wifi_mgr.{h,c}, sntp_mgr.{h,c},
                         model.{h,c}, sensors.{h,c}, display.{h,c}, render.{h,c},
-                        snapshot.{h,c}, http_srv.{h,c}
+                        snapshot.{h,c}, http_srv.{h,c}, http_files.{h,c},
+                        storage_mgr.{h,c}, config_mgr.{h,c}, home.html,
+                        files.html, web_style.css
+    partitions.csv      4 MiB app + 8 MiB wear-levelled FAT
     components/
       u8g2/             compiles the repo's u8g2 submodule csrc + selected fonts
       u8g2_st7305/      vendor ST7305 SPI backend (with ink-polarity inversion)
@@ -452,18 +556,18 @@ Status: ✅ done, ⚠️ partial, ⬜ not started. **Verified on hardware** mean
 flashed to the RLCD 4.2 board and confirmed over CLI/HTTP/panel.
 
 1. ✅ **Host simulator skeleton** — SDL3 400×300 window + scaling, fake ClockModel, u8g2 render path, screenshot export
-2. ✅ **Time model** — Unix ms → local/UTC/MJD(TAI)/GPS week/TOW/ISO week, offset constants, edge-case tests (2/2 tests pass)
+2. ✅ **Time model** — Unix ms → local/UTC/MJD(TAI)/GPS week/TOW/ISO week, offset constants, time-model tests; see reliability regression coverage below
 3. ⚠️ **Fonts and icons** — uses stock u8g2 fonts (inr42/VCR_OSD/7x13) on both platforms; no custom BDF pipeline or icon font yet
 4. ✅ **Main face layout** — single-face layout, screenshot export (host PNG/PBM/BMP; golden screenshot review not automated)
 5. ✅ **ESP32 bring-up** — ESP-IDF v6.0.2 app, u8g2 as IDF component, ST7305 SPI init/flush (vendor backend), 1 Hz display task, CLI, HTTP debug snapshot. **Verified on hardware.**
-6. ⚠️ **Time sync and RTC** — Wi-Fi/SNTP sync, NTP age, DHCP option-42 + manual + fallback servers all verified; PCF85063 RTC read/write, boot-unsafe/RTC-holdover states NOT built (host simulates via keyboard only)
+6. ⚠️ **Time sync and RTC** — Wi-Fi/SNTP sync, NTP age, DHCP option-42 + manual + fallback servers all verified; boot-unsafe gating, system-clock holdover/expiry, reconnect and DHCP fallback/retry implemented; PCF85063 RTC read/write and RTC-backed boot holdover NOT built
 7. ✅ **Sensors and telemetry** — SHTC3 (I2C, CRC-8 verified) + battery ADC (curve-fitted, divider ×3) + real Wi-Fi RSSI. **Verified on hardware** (31.7 °C / 53 %RH / 4.06 V / −43 dBm).
-8. ⬜ **SD storage** — mount (`esp_vfs_fat_sdmmc_mount`), read config file (TZ / offsets / alarm times / `ntp_server`), load alarm sound effects; REST `/fs/` upload API (§8.6): PUT/GET/DELETE + list for JSON config iteration via curl/Python. Transport decided: plain HTTP PUT, not WebDAV (see §8.6). SD `ntp_server` sits between the CLI override and DHCP option 42 in server selection (§8.4).
-9. ⬜ **Polish** — low battery / Wi-Fi lost state, screenshot regression, power behavior tuning
+8. ⚠️ **Storage** — SD FAT, internal wear-levelled FAT, CLI mount/status/format diagnostics, English HTTP file page + GET/PUT/DELETE API and recoverable replacements implemented. Versioned SD-first config selection and TZ/`ntp_server` application are verified; time-scale offsets, alarms and sound loading remain pending (§8.6).
+9. ⚠️ **Polish** — basic Wi-Fi-lost/unsafe visuals and trust-mask rendering regression implemented; low-battery warnings, full golden screenshots and power behavior tuning remain
 
 Also done ahead of plan: **HTTP debug snapshot** (§8.5) shipped with milestone 5,
-and the full host UI is ported to the target (§10) with TZ configurable via CLI
-(§8.4).
+and the full host UI is ported to the target (§10). TZ is selectable from
+versioned config or the CLI (§8.4).
 
 **Roadmap decisions** (recorded so they are not re-litigated later):
 
@@ -483,40 +587,56 @@ and the full host UI is ported to the target (§10) with TZ configurable via CLI
   different project. Cheap resilience instead: multi-server SNTP
   (esp_sntp already indexes servers + reachability) and RTC holdover
   (milestone 6).
-- **NTP server priority**: manual CLI override > SD config JSON
-  (milestone 8) > DHCP option 42 > pool.ntp.org fallback (§8.4).
+- **NTP server priority**: manual CLI override > selected config JSON
+  (SD first, then internal flash) > DHCP option 42 > pool.ntp.org fallback (§8.4).
 
-**Known issues** (behavior verified in `firmware/main/`, recorded so the
-fixes are not re-scoped):
+**Reliability implementation (2026-09-23)**:
 
-- **Wi-Fi does not reconnect after a post-connect drop.** `s_auto_reconnect`
-  is only set while the one-shot `wifi_task` (spawned by `wifi_mgr_connect`)
-  is alive; once connected, that task exits and any later
-  `WIFI_EVENT_STA_DISCONNECTED` merely sets `WIFI_FAIL_BIT` — no reconnect.
-  The retry budget only covers the initial connect sequence. Planned fix:
-  persistent reconnect policy after connect (retry with backoff while
-  credentials remain set) — the instrument is headless and should self-heal
-  from AP drops.
-- **NTP stays on the pool fallback after reverting.** The §8.4 watchdog
-  reverts to pool.ntp.org when the DHCP option-42 server fails to sync
-  within ~18 s, but nothing ever re-evaluates that server, so a later
-  recovery (e.g. the DHCP host's NTP daemon coming back) is never picked
-  up — the device stays on the pool. Planned fix: periodic re-evaluation of
-  higher-priority sources (re-try the DHCP server periodically, switch back
-  when it syncs).
+- Persistent Wi-Fi retry policy after initial connection, including explicit
+  cancellation and serialized replacement credentials. No sleep in event handlers.
+- Callback-owned sync history; status reads cannot trigger a false DHCP failure.
+- Immediate manual/reset selection and periodic DHCP recovery trials.
+- Monotonic sync age, explicit system holdover/expiry and complete unsafe masking.
+- Second-boundary refresh waits bounded by a 1 s monotonic deadline, including
+  forward/backward SNTP steps. Tick delays use `pdMS_TO_TICKS`.
+- Host CTest: time model, frame export, clock-health/clock-step policy, actual
+  firmware network managers against a fake IDF transport, and unsafe rendering.
+  Simulated tests cover 24 h expiry and DHCP failure/recovery; they do not
+  substitute for hardware/network timing verification.
+
+Hardware validation on 2026-09-23 (`/dev/ttyACM0`, isolated Wi-Fi): DHCP
+10.127.16.1 now synchronizes successfully; repeated status reads beyond 18 s
+stay on DHCP. Manual unreachable server -> reset restores DHCP immediately;
+resync and disconnect retain trusted holdover. `wifi reconnect` traversed the
+real driver disconnect path, regained IP in about 3.6 s and synced again.
+Backward-step hardware injection was inconclusive because JTAG reset/halt
+interfered with execution; only the host regression verifies that case.
+The debugger was stopped and the board restored to normal DHCP synchronization.
+
+Remaining: PCF85063, sensor validity/staleness, time-scale offset config, alarm/button/audio,
+full screenshot parity, power tuning. `firmware/partitions.csv` now allocates
+a 4 MiB factory app at 0x10000 and an 8 MiB wear-levelled FAT partition at
+0x410000 on the 16 MiB flash, preserving NVS/PHY offsets. Remaining flash is
+unallocated; there are no OTA slots. Both internal flash and SD can hold the
+managed configuration and sound files.
 
 ---
 
-## 12. Non-goals and SD role
+## 12. Non-goals and storage roles
 
 Not building: LVGL GUI, voice recognition, Bluetooth UI, precision RTC calibration, leap-second historical table, complex on-device menu, full RFC 5905 NTP client or xleave (SNTP suffices — see Roadmap decisions in §11).
 
-**SD card role**: store a config file (TZ offset, TAI/GPS offset overrides, alarm times) and alarm sound-effect samples. Not a general log sink in the first version. Config files are pushed over the LAN via the REST `/fs/` upload endpoint (§8.6) — plain HTTP PUT from curl/Python, deliberately not WebDAV.
+**Storage role**: both SD and internal flash hold config JSON and alarm sound
+files. Neither is a general log sink in the first version. HTTP web file
+management and the volume-aware API are implemented (§8.6).
 
-Future extensions: RTC drift measurement, Wi-Fi captive config portal, web UI (the §8.5 snapshot endpoint is a debug tool and the §8.6 `/fs/` endpoint is a config-transfer API — neither is the start of a web UI), SD-based logging, ham radio page (poll solar conditions / HF propagation info).
+Future extensions: RTC drift measurement, Wi-Fi captive config portal, richer
+settings UI (the current `/files` page edits JSON versions but has no form for
+individual settings), SD-based logging, ham radio page (poll solar conditions
+/ HF propagation info).
 
-Built ahead of the original plan: HTTP debug snapshot (§8.5), CLI-configurable
-TZ, DHCP option-42 NTP, and real SHTC3/battery telemetry — see milestone
+Built ahead of the original plan: HTTP debug snapshot (§8.5), versioned
+SD-first config selection, CLI-configurable TZ, DHCP option-42 NTP, and real SHTC3/battery telemetry — see milestone
 status in §11.
 
 ---
@@ -526,17 +646,17 @@ status in §11.
 ```text
 Product         RLCD Time Scale Monitor
 Display         400×300 landscape monochrome (RLCD: bit 0 = ink/black)
-Primary source  Wi-Fi SNTP (CLI > SD config > DHCP option 42 > pool fallback)
-Holdover        PCF85063 RTC / ESP32 system time  [RTC not yet wired]
+Primary source  Wi-Fi SNTP (CLI > SD/flash config > DHCP option 42 > pool fallback)
+Holdover        ESP32 system time after sync (PCF85063 RTC not yet wired)
 Main fields     local time, UTC, MJD(TAI), GPS week/TOW, ISO week
 Aesthetic       fixed-width time-scale telemetry instrument
 GUI framework   no LVGL
 Drawing engine  u8g2 (csrc submodule, both platforms)
 Host preview    SDL3 backend presenting u8g2 framebuffer
 Target          ESP-IDF v6.0.2 + ST7305 SPI flush; HTTP debug snapshot (PBM/BMP)
-UI              Serial CLI (USB-Serial/JTAG): wifi / ntp / tz / sensor / http
+UI              Serial CLI (USB-Serial/JTAG) + English HTTP homepage/file manager
 Asset format    stock u8g2 fonts (custom BDF pipeline not yet built)
-SD role         config file + alarm time / sound-effect storage; REST /fs/ upload (§8.6)  [not built]
+Storage         SD FAT + 8 MiB internal wear-levelled FAT; SD-first versioned TZ/NTP config and web file manager/API built; alarm/audio pending (§8.6)
 ```
 
 Core architectural principle: first write it as a portable 400×300 monochrome

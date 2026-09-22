@@ -4,21 +4,23 @@ A Waveshare ESP32-S3 RLCD 4.2 based **time-scale instrument** — a reflective
 monochrome 400×300 display showing local time, UTC, MJD(TAI), GPS week/TOW,
 ISO week date, sync state and telemetry, in a fixed-width instrument aesthetic.
 
-Primary time source is Wi-Fi SNTP/NTP, with PCF85063 RTC / ESP32 system time
-as holdover. No GNSS, no PPS, no leap-second historical table.
+Primary time source is Wi-Fi SNTP. After a successful sync, the ESP32 system
+clock provides bounded holdover; PCF85063 RTC integration is still pending.
+No GNSS, no PPS, no leap-second historical table.
 
 ## Repository layout
 
 ```
 AGENTS.md                                            env, hardware facts, bring-up gotchas
 rlcd_time_scale_monitor_implementation_notes.md      design reference (current status)
-common/                                              shared pure-C render path
+common/                                              shared pure-C render, clock and storage code
   time_model.{h,c} render_faces.{h,c} frame_export.{h,c} display_geometry.h
+  clock_health.{h,c} storage_files.{h,c}
 host/                                                host-first simulator (SDL3 + u8g2)
   src/    host platform code only: main, host_time glue, SDL3 backend
-  tests/  offline unit tests (time model, frame export)
+  tests/  seven host tests, including firmware policy and config selection
 firmware/                                            ESP-IDF v6.0.2 target firmware
-  main/       app, CLI, Wi-Fi/SNTP/HTTP, display task, sensors, model glue
+  main/       app, CLI, Wi-Fi/SNTP/HTTP, storage/config, display, sensors
   components/ u8g2 (submodule) + u8g2_st7305 SPI backend
 u8g2/                                                u8g2 submodule (drawing engine)
 docs/                                                schematics
@@ -38,7 +40,7 @@ time-scale math.
 ```sh
 cmake -S host -B host/build -DCMAKE_BUILD_TYPE=Release
 cmake --build host/build -j
-ctest --test-dir host/build --output-on-failure   # time-model + frame-export tests
+ctest --test-dir host/build --output-on-failure   # seven host tests
 host/build/rlcd_host                              # window (15 Hz cap, nearest-neighbor)
 host/build/rlcd_host --scale 2
 host/build/rlcd_host --pbm out.pbm                # headless single-frame dump
@@ -51,31 +53,53 @@ spec.
 
 ## Firmware (ESP32-S3 RLCD)
 
-ESP-IDF v6.0.2 bring-up firmware — Wi-Fi/SNTP/HTTP server + serial CLI, with
-**non-persistent settings** (WIFI_STORAGE_RAM; nothing written to NVS; TZ
-defaults to UTC+8 at boot). Build/flash:
+ESP-IDF v6.0.2 firmware — Wi-Fi/SNTP/HTTP server + serial CLI. Wi-Fi
+credentials and CLI overrides are RAM-only (WIFI_STORAGE_RAM; nothing written
+to NVS). Versioned settings on SD or internal flash persist across reboot;
+without a usable config, TZ defaults to UTC+8.
+
+Flash layout is defined in `firmware/partitions.csv`: one 4 MiB factory app
+and an 8 MiB FAT data partition on the 16 MiB flash, with NVS/PHY retained.
+The internal filesystem mounts at `/flash` with 4096-byte-sector wear levelling;
+SD mounts at `/sdcard`. `flash init` explicitly initializes an unmountable
+internal filesystem; ordinary boot mounts never auto-format.
+
+Build/flash:
 
 ```sh
 source /opt/esp-idf/export.sh
 cd firmware
-idf.py -p /dev/ttyACM1 build flash
+idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
 ```
 
 - **Display**: the full single face on the ST7305 panel via the vendor
   `u8g2_st7305` SPI backend, refreshed 1 Hz aligned to the wall-clock second
   boundary (self-heals across SNTP steps).
 - **CLI** (USB-Serial/JTAG console): `wifi connect "<ssid>" [password]`,
-  `ntp status | ntp server <host>`, `tz [±HH:MM|minutes|reset]`,
-  `sensor`, `http status`. `linenoise` runs in dumb mode for the USB VFS.
+  `wifi reconnect`, `ntp status | ntp server <host> | ntp reset`,
+  `tz [±HH:MM|minutes|reset]`, `config status | reload`, `sensor`, `sd`,
+  `flash status | mount | init`, `http status`. `linenoise`
+  runs in dumb mode for the USB VFS.
 - **Sensors**: SHTC3 temperature/humidity (I2C, CRC-8 checked) + battery
   voltage (ADC1 CH3, ×3 divider). Device RSSI is real
   (`esp_wifi_sta_get_ap_info`); values flow into the model each frame.
-- **HTTP debug server** (:80): `/`, `/status`, `/snapshot.pbm`,
+- **SD card**: FAT on 1-bit SDMMC (CLK=38 CMD=21 D0=39, 20 MHz), mounted
+  at `/sdcard` without auto-formatting. CLI: `sd status`, `sd ls [dir]`,
+  `sd cat <file>` (4 KiB preview), `sd test` (temporary-file round trip),
+  `sd unmount` / `sd mount`, and destructive `sd format` (16 KiB clusters).
+  Paths are relative to `/sdcard`. Unmount before removing the card;
+  automatic hotplug is not implemented. Both storage volumes are managed at
+  `http://<device>/files` and through GET/PUT/DELETE under `/fs/flash/`
+  and `/fs/sd/` (versioned JSON configs and WAV sounds).
+- **HTTP server** (:80): English homepage `/`, English file manager `/files`,
+  status `/status`, active config `/fs/active`, and `/snapshot.pbm` and
   `/snapshot.bmp`. Snapshots encode via the shared `frame_export`, so
   host↔target exports are byte-comparable.
-- **NTP**: manual `ntp server` CLI > SD config `ntp_server` (milestone 8) >
-  DHCP option 42 > pool.ntp.org, with a watchdog that reverts to the pool if
-  the DHCP-provided server cannot sync within ~18 s. Stays on the lwIP SNTP
+- **NTP**: manual `ntp server` CLI > selected config `ntp_server` (SD first,
+  then internal flash) > DHCP option 42 > pool.ntp.org, with a watchdog that reverts to the pool if
+  the DHCP-provided server cannot sync within 18 s, and retries DHCP every
+  5 minutes. Last-good trust survives resync; age uses monotonic time, with
+  2 h freshness and 24 h maximum system-clock holdover. Stays on the lwIP SNTP
   client — full NTP/xleave is a recorded non-goal (see design notes §11).
 
 ## Design reference
@@ -90,10 +114,55 @@ is the operational reference (environment, pin map, hardware gotchas).
 
 - **Host simulator**: working — single face renders all time-scale fields
   from the system clock, sync/Wi-Fi/battery states exercisable from the
-  keyboard, headless PBM/BMP/PNG export, 15 Hz frame cap.
+  keyboard, headless PBM/BMP/PNG export, 15 Hz frame cap, seven CTest targets.
 - **Firmware**: working — full UI ported to the panel and verified on
   hardware (time/sensors/telemetry all live), Wi-Fi + SNTP + HTTP +
   CLI bring-up complete, 1 Hz second-aligned refresh.
-- **Not yet**: SD card config/alarm storage, PCF85063 RTC holdover,
-  alarm feature, custom icon fonts, low-battery/Wi-Fi-lost visual polish —
+- **Not yet**: alarm scheduling and audio playback (including FLAC),
+  time-scale offset config, PCF85063 RTC holdover, custom icon fonts,
+  low-battery visual polish —
   see milestone status in the design notes.
+
+## HTTP file management
+
+`GET /files` opens the responsive file manager (volume selection, directory
+listing, multi-file upload/drop, download, delete and versioned JSON editing).
+The homepage at `/` uses the same style. `GET /fs/` lists mounted volumes and
+free space; `GET /fs/active` reports the selected config. File API examples:
+
+```sh
+curl http://<device>/fs/flash/
+curl -T config.json http://<device>/fs/flash/config/20260923T120000000Z.json
+curl -T alarm.wav http://<device>/fs/sd/sounds/alarm.wav
+curl -o saved.json http://<device>/fs/flash/config/20260923T120000000Z.json
+curl -X DELETE http://<device>/fs/sd/sounds/alarm.wav
+```
+
+Managed files are `config/<ASCII name>.json` (JSON objects, max 16 KiB,
+max nesting 16) and `sounds/<ASCII name>.wav` (RIFF/WAVE container with
+matching length, max 16 MiB and available space permitting). Config versions
+are read in descending filename order: the first valid SD version wins; if
+none is usable, the first valid internal-flash version wins; otherwise the
+defaults apply. SD takes priority even when a Flash filename sorts later.
+Supported keys are `tz_offset_minutes` (integer -840..840; default +480) and
+optional `ntp_server` (hostname or IPv4 address). For example:
+
+```json
+{"tz_offset_minutes": 480, "ntp_server": "pool.ntp.org"}
+```
+
+CLI timezone and NTP overrides take priority until reset. Uploading a config
+requires a new filename
+(409 if already present); the web editor creates a timestamped version and
+retains older files. Invalid config returns 422. WAV playback and alarm
+configuration are still pending. Paths are case-sensitive at the API;
+percent-encode spaces, and use no query parameters. Root, `config/` and
+`sounds/` listings return JSON; file listings show at most 256 entries.
+
+Uploads use Content-Length and a 120 s deadline; downloads also have a
+120 s deadline. A storage worker handles one transfer at a time, with one
+additional request queued, keeping `/status` and snapshots responsive.
+Serial unmount/format waits for storage ownership. A private `.rlcd-txn`
+journal stages replacements and recovers interrupted rename sequences;
+this is not a guarantee against FAT metadata damage on power loss. Do not
+modify that directory. No HTTP formatting endpoint is exposed.

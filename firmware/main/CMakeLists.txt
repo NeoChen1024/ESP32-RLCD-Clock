@@ -4,20 +4,30 @@ idf_component_register(
          "wifi_mgr.c"
          "sntp_mgr.c"
          "http_srv.c"
+         "http_files.c"
          "snapshot.c"
          "display.c"
          "render.c"
          "model.c"
          "sensors.c"
+         "storage_mgr.c"
+         "config_mgr.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_wifi esp_netif nvs_flash esp_http_server lwip console esp_timer u8g2 esp_driver_usb_serial_jtag u8g2_st7305 esp_driver_i2c esp_adc
+    EMBED_TXTFILES "files.html" "home.html" "web_style.css"
+    REQUIRES esp_wifi esp_netif nvs_flash esp_http_server lwip console esp_timer u8g2 esp_driver_usb_serial_jtag u8g2_st7305 esp_driver_i2c esp_adc fatfs sdmmc esp_driver_sdmmc wear_levelling
 )
 
 # Shared pure-C sources: compile the common/ copies directly so host and
 # target can never drift (design notes §9 / frame_export pattern).
 target_sources(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/storage_files.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/clock_health.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/time_model.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/render_faces.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/frame_export.c"
 )
 target_include_directories(${COMPONENT_LIB} PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../../common")
+
+# Capture option 42 independently of the active SNTP table (manual overrides
+# and fallback must not destroy the DHCP selection used by reset/retry).
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=dhcp_set_ntp_servers")

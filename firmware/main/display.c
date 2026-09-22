@@ -1,6 +1,8 @@
 #include "display.h"
+#include "clock_health.h"
 
 #include <string.h>
+#include <stdatomic.h>
 #include <sys/time.h>
 
 #include "esp_log.h"
@@ -14,6 +16,9 @@ static const char *TAG = "display";
 
 static u8g2_st7305_t    s_dev;
 static SemaphoreHandle_t s_lock;
+static _Atomic uint32_t s_frame_count;
+
+uint32_t display_frame_count(void) { return atomic_load(&s_frame_count); }
 
 /*
  * Ink polarity: the RLCD panel renders bit 0 as ink (black) and bit 1 as
@@ -70,17 +75,9 @@ static int64_t wall_ms_now(void)
     return (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000;
 }
 
-/* Periodic refresh: render current state and flush to the panel, aligned to
- * the start of each wall-clock second so the face updates crisply at the
- * second boundary.
- *
- * vTaskDelay counts FreeRTOS ticks, NOT wall-clock ms, and the two can drift
- * by a ms or two (systick vs NTP-adjusted gettimeofday). A raw delay to the
- * computed boundary can therefore wake slightly BEFORE the real second
- * boundary, and gettimeofday would still return the previous second — that
- * frame then shows the old second for a full second (51->52->52->54). So we
- * re-check the wall clock after waking and keep sleeping until it has
- * actually crossed the boundary, then render. */
+/* Align to wall-clock seconds, but bound each wait by monotonic time so
+ * backward SNTP steps cannot stall the panel. Early tick wakes recheck the
+ * original boundary instead of pushing it into the next second. */
 static void display_task(void *arg)
 {
     (void)arg;
@@ -89,21 +86,17 @@ static void display_task(void *arg)
         if (g) {
             render_frame(g);
             u8g2_SendBuffer(g);   /* triggers the ST7305 flush (inverted there) */
+            atomic_fetch_add(&s_frame_count, 1);
             display_unlock();
         }
-        /* Sleep until just after the next wall-clock second boundary, then
-         * render. The target is computed ONCE; after waking we only check
-         * whether the wall clock has crossed it. Recomputing "next" each
-         * iteration would keep pushing the goal forward when systick and the
-         * wall clock drift (wake lands 1-2ms past the boundary, sleep stays
-         * ~998ms, loop never exits). Early wakes (systick fast) re-sleep the
-         * remaining gap; late wakes render immediately with the new second. */
-        int64_t target = (wall_ms_now() / 1000 + 1) * 1000;
+        int64_t wall_start = wall_ms_now();
+        int64_t mono_start = esp_timer_get_time() / 1000;
         for (;;) {
-            int64_t now_ms = wall_ms_now();
-            if (now_ms >= target) break;
-            int64_t remain = target - now_ms;
-            vTaskDelay((TickType_t)(remain > 0 ? remain : 1));
+            uint32_t wait_ms = clock_frame_wait_ms(wall_start, mono_start,
+                wall_ms_now(), esp_timer_get_time() / 1000);
+            if (!wait_ms) break;
+            TickType_t ticks = pdMS_TO_TICKS(wait_ms);
+            vTaskDelay(ticks ? ticks : 1);
         }
     }
 }

@@ -7,6 +7,7 @@ compile_commands.json
 sdkconfig
 firmware/sdkconfig
 sdkconfig.old
+firmware/managed_components/
 
 # clangd / LSP cache
 .cache/

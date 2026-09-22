@@ -1,4 +1,5 @@
 #include "http_srv.h"
+#include "http_files.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -7,9 +8,14 @@
 #include "esp_log.h"
 #include "sntp_mgr.h"
 #include "snapshot.h"
+#include "display.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "http_srv";
+extern const unsigned char home_html_start[] asm("_binary_home_html_start");
+extern const unsigned char home_html_end[] asm("_binary_home_html_end");
+extern const unsigned char web_style_css_start[] asm("_binary_web_style_css_start");
+extern const unsigned char web_style_css_end[] asm("_binary_web_style_css_end");
 
 /* ---- shared: snapshot streamed through fopencookie ---- */
 
@@ -89,33 +95,35 @@ static esp_err_t handler_status(httpd_req_t *req)
                   "{\"wifi\":{\"state\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},",
                   wstate, w.ssid, w.ip, w.rssi_dbm);
     n += snprintf(body + n, sizeof body - (size_t)n,
-                  "\"sntp\":{\"started\":%s,\"synced\":%s,\"unix\":%lld}}",
+                  "\"sntp\":{\"started\":%s,\"synced\":%s,\"trusted\":%s,"
+                  "\"fresh\":%s,\"age_s\":%lu,\"source\":\"%s\",\"unix\":%lld},"
+                  "\"display_frames\":%lu}",
                   s.started ? "true" : "false",
                   s.synced ? "true" : "false",
-                  (long long)s.unix_sec);
+                  s.time_trusted ? "true" : "false",
+                  s.fresh ? "true" : "false",
+                  (unsigned long)s.ntp_age_s,
+                  s.using_manual ? "manual" : s.using_config ? "config" :
+                  s.using_dhcp ? "dhcp" : "fallback",
+                  (long long)s.unix_sec, (unsigned long)display_frame_count());
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_sendstr(req, body);
 }
 
-/* ---- /: minimal HTML preview ---- */
-
-static const char index_html[] =
-    "<!doctype html><html><head><meta charset=utf-8>"
-    "<meta http-equiv=refresh content=5>"
-    "<title>RLCD</title></head><body style='background:#eee'>"
-    "<h2>RLCD bring-up</h2>"
-    "<img src=/snapshot.bmp style='image-rendering:pixelated;width:800px'>"
-    "<p><a href=/status>status</a> | "
-    "<a href=/snapshot.pbm>snapshot.pbm</a> | "
-    "<a href=/snapshot.bmp>snapshot.bmp</a></p>"
-    "</body></html>";
-
 static esp_err_t handler_index(httpd_req_t *req)
 {
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_sendstr(req, index_html);
+    httpd_resp_set_type(req, "text/html; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, (const char *)home_html_start, home_html_end - home_html_start - 1);
+}
+static esp_err_t handler_style(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/css; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, (const char *)web_style_css_start,
+                           web_style_css_end - web_style_css_start - 1);
 }
 
 bool http_srv_start(void)
@@ -123,6 +131,7 @@ bool http_srv_start(void)
     httpd_handle_t server = NULL;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn = httpd_uri_match_wildcard;
+    cfg.max_uri_handlers = 12;
 
     if (httpd_start(&server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed (port busy?)");
@@ -133,6 +142,8 @@ bool http_srv_start(void)
         { .uri = "/",             .method = HTTP_GET, .handler = handler_index,
           .user_ctx = NULL },
         { .uri = "/status",       .method = HTTP_GET, .handler = handler_status,
+          .user_ctx = NULL },
+        { .uri = "/web_style.css", .method = HTTP_GET, .handler = handler_style,
           .user_ctx = NULL },
         { .uri = "/snapshot.pbm", .method = HTTP_GET, .handler = handler_snapshot_pbm,
           .user_ctx = NULL },
@@ -145,6 +156,7 @@ bool http_srv_start(void)
             return false;
         }
     }
+    if (!http_files_register(server)) { httpd_stop(server); return false; }
     ESP_LOGI(TAG, "HTTP server on :%d", cfg.server_port);
     return true;
 }
