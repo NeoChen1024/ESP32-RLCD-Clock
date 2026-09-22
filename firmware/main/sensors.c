@@ -31,6 +31,7 @@ static i2c_master_dev_handle_t      s_shtc3;
 static adc_oneshot_unit_handle_t    s_adc;
 static adc_cali_handle_t            s_adc_cali;
 static bool                         s_shtc3_present;
+i2c_master_bus_handle_t sensors_i2c_bus(void) { return s_i2c_bus; }
 
 /* ---- SHTC3 helpers ---- */
 

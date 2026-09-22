@@ -58,7 +58,7 @@ void time_model_now(clock_model_t *m)
         } else {
             m->sync = SYNC_WIFI_LOST;
         }
-    } else if (s.synced) {
+    } else if (s.synced || s.rtc_seeded) {
         m->sync = SYNC_TIME_UNSAFE;
     } else if (w.state == WIFI_MGR_CONNECTED) {
         m->sync = SYNC_SYNCING;          /* connected, waiting on SNTP */

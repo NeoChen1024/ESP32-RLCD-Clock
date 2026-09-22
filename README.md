@@ -5,7 +5,8 @@ monochrome 400×300 display showing local time, UTC, MJD(TAI), GPS week/TOW,
 ISO week date, sync state and telemetry, in a fixed-width instrument aesthetic.
 
 Primary time source is Wi-Fi SNTP. After a successful sync, the ESP32 system
-clock provides bounded holdover; PCF85063 RTC integration is still pending.
+clock provides bounded holdover. The PCF85063A RTC can restore trusted time
+across a reboot while the last verified SNTP sync is less than 24 hours old.
 No GNSS, no PPS, no leap-second historical table.
 
 ## Repository layout
@@ -18,7 +19,7 @@ common/                                              shared pure-C render, clock
   clock_health.{h,c} storage_files.{h,c}
 host/                                                host-first simulator (SDL3 + u8g2)
   src/    host platform code only: main, host_time glue, SDL3 backend
-  tests/  seven host tests, including firmware policy and config selection
+  tests/  eight host tests, including RTC policy and config selection
 firmware/                                            ESP-IDF v6.0.2 target firmware
   main/       app, CLI, Wi-Fi/SNTP/HTTP, storage/config, display, sensors
   components/ u8g2 (submodule) + u8g2_st7305 SPI backend
@@ -40,7 +41,7 @@ time-scale math.
 ```sh
 cmake -S host -B host/build -DCMAKE_BUILD_TYPE=Release
 cmake --build host/build -j
-ctest --test-dir host/build --output-on-failure   # seven host tests
+ctest --test-dir host/build --output-on-failure   # eight host tests
 host/build/rlcd_host                              # window (15 Hz cap, nearest-neighbor)
 host/build/rlcd_host --scale 2
 host/build/rlcd_host --pbm out.pbm                # headless single-frame dump
@@ -54,8 +55,9 @@ spec.
 ## Firmware (ESP32-S3 RLCD)
 
 ESP-IDF v6.0.2 firmware — Wi-Fi/SNTP/HTTP server + serial CLI. Wi-Fi
-credentials and CLI overrides are RAM-only (WIFI_STORAGE_RAM; nothing written
-to NVS). Versioned settings on SD or internal flash persist across reboot;
+credentials and CLI overrides are RAM-only (WIFI_STORAGE_RAM). A small NVS
+record stores the last verified SNTP checkpoint for RTC trust, not user config.
+Versioned settings on SD or internal flash persist across reboot;
 without a usable config, TZ defaults to UTC+8.
 
 Flash layout is defined in `firmware/partitions.csv`: one 4 MiB factory app
@@ -77,12 +79,18 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   boundary (self-heals across SNTP steps).
 - **CLI** (USB-Serial/JTAG console): `wifi connect "<ssid>" [password]`,
   `wifi reconnect`, `ntp status | ntp server <host> | ntp reset`,
-  `tz [±HH:MM|minutes|reset]`, `config status | reload`, `sensor`, `sd`,
+  `tz [±HH:MM|minutes|reset]`, `config status | reload`, `rtc status`, `sensor`, `sd`,
   `flash status | mount | init`, `http status`. `linenoise`
   runs in dumb mode for the USB VFS.
 - **Sensors**: SHTC3 temperature/humidity (I2C, CRC-8 checked) + battery
   voltage (ADC1 CH3, ×3 divider). Device RSSI is real
   (`esp_wifi_sta_get_ap_info`); values flow into the model each frame.
+- **RTC holdover**: PCF85063A on the shared I²C bus is updated after SNTP
+  synchronization. A boot read is accepted only when its oscillator-stop flag
+  is clear, its calendar and RAM marker are valid, and its time is less than
+  24 hours after the NVS last-sync checkpoint. `rtc status` shows these checks.
+  A valid RTC boot is trusted holdover, not a fresh SNTP synchronization;
+  invalid or stale RTC data leaves time fields masked until SNTP succeeds.
 - **SD card**: FAT on 1-bit SDMMC (CLK=38 CMD=21 D0=39, 20 MHz), mounted
   at `/sdcard` without auto-formatting. CLI: `sd status`, `sd ls [dir]`,
   `sd cat <file>` (4 KiB preview), `sd test` (temporary-file round trip),
@@ -99,7 +107,7 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   then internal flash) > DHCP option 42 > pool.ntp.org, with a watchdog that reverts to the pool if
   the DHCP-provided server cannot sync within 18 s, and retries DHCP every
   5 minutes. Last-good trust survives resync; age uses monotonic time, with
-  2 h freshness and 24 h maximum system-clock holdover. Stays on the lwIP SNTP
+  2 h freshness and 24 h maximum holdover. Stays on the lwIP SNTP
   client — full NTP/xleave is a recorded non-goal (see design notes §11).
 
 ## Design reference
@@ -114,12 +122,12 @@ is the operational reference (environment, pin map, hardware gotchas).
 
 - **Host simulator**: working — single face renders all time-scale fields
   from the system clock, sync/Wi-Fi/battery states exercisable from the
-  keyboard, headless PBM/BMP/PNG export, 15 Hz frame cap, seven CTest targets.
+  keyboard, headless PBM/BMP/PNG export, 15 Hz frame cap, eight CTest targets.
 - **Firmware**: working — full UI ported to the panel and verified on
   hardware (time/sensors/telemetry all live), Wi-Fi + SNTP + HTTP +
   CLI bring-up complete, 1 Hz second-aligned refresh.
 - **Not yet**: alarm scheduling and audio playback (including FLAC),
-  time-scale offset config, PCF85063 RTC holdover, custom icon fonts,
+  time-scale offset config, RTC drift calibration, custom icon fonts,
   low-battery visual polish —
   see milestone status in the design notes.
 

@@ -10,6 +10,7 @@ idf_component_register(
          "render.c"
          "model.c"
          "sensors.c"
+         "rtc_mgr.c"
          "storage_mgr.c"
          "config_mgr.c"
     INCLUDE_DIRS "."
@@ -22,6 +23,7 @@ idf_component_register(
 target_sources(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../../common/storage_files.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/clock_health.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/rtc_clock.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/time_model.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/render_faces.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/frame_export.c"

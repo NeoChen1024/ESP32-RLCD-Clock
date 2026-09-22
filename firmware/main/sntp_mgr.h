@@ -23,6 +23,7 @@
 typedef struct {
     bool started;
     bool synced;            /* at least one successful sync this boot */
+    bool rtc_seeded;        /* boot time came from the RTC before SNTP */
     bool time_trusted;      /* last sync younger than holdover limit */
     bool fresh;             /* current source synced recently, network up */
     int64_t unix_sec;       /* current system time at snapshot */
@@ -37,6 +38,9 @@ typedef struct {
 
 /* Start the SNTP service; config is supplied after storage mounts at boot. */
 void sntp_mgr_start(void);
+/* Import RTC time whose last-sync age was already checked against the 24 h
+ * policy. Does not count as an SNTP sync or make the current source fresh. */
+bool sntp_mgr_seed_rtc(uint32_t age_s);
 
 /* Called from the Wi-Fi event loop after GOT_IP: select the current priority
  * source. Disconnect stops SNTP and clears

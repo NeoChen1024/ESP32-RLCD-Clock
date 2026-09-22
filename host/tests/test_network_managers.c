@@ -16,6 +16,10 @@ int main(void)
     sntp_mgr_start();
     assert(!fake_sntp_running);
     assert(!sntp_mgr_status().time_trusted);
+    assert(sntp_mgr_seed_rtc(60));
+    assert(sntp_mgr_status().rtc_seeded && sntp_mgr_status().time_trusted);
+    assert(!sntp_mgr_status().synced && !sntp_mgr_status().fresh);
+    assert(!sntp_mgr_seed_rtc(0));
     assert(wifi_mgr_connect("test-ap", "test-only", 0));
     fake_drain();
     assert(fake_connect_calls == 1);

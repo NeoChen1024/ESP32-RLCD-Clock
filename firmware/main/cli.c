@@ -12,6 +12,7 @@
 #include "linenoise/linenoise.h"
 #include "model.h"
 #include "config_mgr.h"
+#include "rtc_mgr.h"
 #include "sensors.h"
 #include "storage_mgr.h"
 #include "sntp_mgr.h"
@@ -234,6 +235,30 @@ static int cmd_config(int argc, char **argv)
     return 0;
 }
 
+static int cmd_rtc(int argc, char **argv)
+{
+    if (argc > 2 || (argc == 2 && strcmp(argv[1], "status"))) {
+        printf("usage: rtc [status]\n"); return 1;
+    }
+    rtc_mgr_status_t st = rtc_mgr_status();
+    printf("present: %s\noscillator stopped: %s\nmarker valid: %s\ncalendar valid: %s\n",
+           st.present ? "yes" : "no", st.oscillator_stopped ? "yes" : "no",
+           st.marker_valid ? "yes" : "no", st.calendar_valid ? "yes" : "no");
+    printf("checkpoint: %s\nboot eligible: %s\nused at boot: %s\n",
+           st.anchor_valid ? "yes" : "no", st.eligible ? "yes" : "no",
+           st.boot_used ? "yes" : "no");
+    if (st.calendar_valid) {
+        time_t t = (time_t)st.utc_sec;
+        struct tm tm;
+        char value[32];
+        gmtime_r(&t, &tm);
+        strftime(value, sizeof value, "%Y-%m-%d %H:%M:%S UTC", &tm);
+        printf("rtc time: %s\n", value);
+    }
+    if (st.anchor_valid) printf("last SNTP checkpoint: %lld UTC\n", (long long)st.last_sync_sec);
+    return st.present ? 0 : 1;
+}
+
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
@@ -252,6 +277,8 @@ static void register_cmds(void)
           .func = cmd_sensor },
         { .command = "config", .help = "selected version: status | reload",
           .func = cmd_config },
+        { .command = "rtc", .help = "PCF85063A boot-holdover diagnostics: status",
+          .func = cmd_rtc },
         { .command = "sd", .help = "SD card: status | mount | unmount | ls [dir] | cat <file> | test | format (ERASE SD)",
           .func = cmd_sd },
         { .command = "flash", .help = "Internal FAT: status | mount | init (formats if unmountable)",

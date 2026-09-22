@@ -1,5 +1,6 @@
 #include "sntp_mgr.h"
 #include "clock_health.h"
+#include "rtc_mgr.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +22,7 @@ typedef enum { SOURCE_FALLBACK, SOURCE_DHCP, SOURCE_CONFIG, SOURCE_MANUAL } sour
 static bool s_started, s_online, s_manual, s_config, s_dhcp_dirty;
 static source_t s_source;
 static clock_health_t s_health;
+static bool s_ntp_synced, s_rtc_seeded;
 static char s_manual_name[64];
 static char s_config_name[64];
 static char s_name[64] = "pool.ntp.org";
@@ -30,8 +32,9 @@ static int64_t s_retry_at_us;
 
 static void on_sync_time(struct timeval *tv)
 {
-    (void)tv;
     clock_health_sync(&s_health, esp_timer_get_time());
+    s_ntp_synced = true;
+    rtc_mgr_on_sync(tv->tv_sec);
     ESP_LOGI(TAG, "SNTP synchronized (%s)", s_name);
 }
 
@@ -125,6 +128,20 @@ static void run_core(tcpip_callback_fn fn, void *arg)
 
 void sntp_mgr_start(void) { run_core(start_core, NULL); }
 
+typedef struct { uint32_t age_s; bool accepted; } rtc_seed_arg_t;
+static void seed_rtc_core(void *arg)
+{
+    rtc_seed_arg_t *seed = arg;
+    seed->accepted = clock_health_seed_rtc(&s_health, esp_timer_get_time(), seed->age_s);
+    if (seed->accepted) s_rtc_seeded = true;
+}
+bool sntp_mgr_seed_rtc(uint32_t age_s)
+{
+    rtc_seed_arg_t seed = {.age_s = age_s};
+    run_core(seed_rtc_core, &seed);
+    return seed.accepted;
+}
+
 static void network_core(void *arg)
 {
     bool online = *(bool *)arg;
@@ -190,7 +207,8 @@ static void status_core(void *arg)
     memset(st, 0, sizeof *st);
     int64_t now = esp_timer_get_time();
     st->started = s_started;
-    st->synced = s_health.ever_synced;
+    st->synced = s_ntp_synced;
+    st->rtc_seeded = s_rtc_seeded;
     st->time_trusted = clock_health_trusted(&s_health, now);
     st->fresh = s_online && clock_health_fresh(&s_health, now);
     st->ntp_age_s = clock_health_age(&s_health, now);

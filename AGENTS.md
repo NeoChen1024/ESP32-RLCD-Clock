@@ -92,8 +92,8 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the currently detected port
   ntp resync`, `tz [±HH:MM|±HHMM|minutes|reset]`, `config status |
   config reload`, `sensor`, `sd status | mount | unmount | ls | cat | test |
   format`, `flash status | mount | init`, `http status`. Wi-Fi credentials
-  and CLI overrides are RAM-only
-  (WIFI_STORAGE_RAM; nothing written to NVS); boot loads the selected config
+  and CLI overrides are RAM-only (WIFI_STORAGE_RAM); only a small last-SNTP
+  checkpoint for RTC trust is written to NVS. Boot loads the selected config
   version from SD, then flash, or defaults to UTC+8.
 - **UI**: the full time-scale face is ported. Shared sources compiled verbatim
   from `common/`: `time_model.c` (pure int64 derivations; platform hooks
@@ -116,14 +116,25 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the currently detected port
   `--wrap=dhcp_set_ntp_servers`; all SNTP operations run on tcpip_thread.
   Failed DHCP trials fall back after 18 s and retry every 5 minutes;
   `ntp reset` restores config/DHCP/fallback priority immediately. Sync age uses
-  monotonic time: fresh <2 h, trusted system-clock holdover <24 h.
+  monotonic time: fresh <2 h, trusted holdover <24 h.
   Status reads never consume sync events. Manual changes/resync preserve
-  last-good trust. PCF85063 itself is still not implemented.
+  last-good trust. The PCF85063A boot holdover path is implemented; see below.
   Historical 2026-08 bring-up found no NTP service at DHCP source 10.127.16.1;
   current 2026-09-23 hardware testing on the isolated Wi-Fi confirms it now
   responds successfully. Do not assume the old outage persists.
   Wi-Fi retries indefinitely with 1–30 s capped backoff; explicit disconnect
   cancels retries. `wifi reconnect` exercises a real driver disconnect/recovery.
+
+- **RTC**: `rtc_mgr.c` shares the sensor I²C bus (PCF85063A address 0x51),
+  writes UTC after each SNTP sync from a separate worker, and stores a
+  last-sync checkpoint in NVS at most once per 6 h. A boot RTC read requires
+  a clear oscillator-stop flag, a valid calendar and RAM marker, plus an RTC
+  time less than 24 h after the checkpoint. Only then does it seed the system
+  clock and holdover trust; it does not count as a fresh SNTP sync. `rtc status`
+  reports the hardware checks. Without a usable RTC, boot remains unsafe.
+  Verified on hardware: initial OS flag blocked trust; after SNTP, the RTC
+  and checkpoint survived reboot and were used before Wi-Fi connected; SNTP
+  later replaced holdover. RTC drift calibration is not implemented.
 
 - **Display**: real ST7305 panel via `firmware/components/u8g2_st7305/`
   (vendor-provided backend: SPI mode 0 @ 24 MHz, MOSI=12 SCK=11 DC=5 CS=40

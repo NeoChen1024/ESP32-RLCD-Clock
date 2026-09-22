@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "http_srv.h"
 #include "nvs_flash.h"
+#include "rtc_mgr.h"
 #include "sensors.h"
 #include "storage_mgr.h"
 #include "sntp_mgr.h"
@@ -39,6 +40,9 @@ void app_main(void)
     if (!sensors_start()) {
         ESP_LOGE(TAG, "sensors_start failed");
     }
+    if (!rtc_mgr_start()) {
+        ESP_LOGW(TAG, "RTC unavailable for boot holdover");
+    }
 
     if (display_start()) {
         display_task_start();
@@ -54,6 +58,6 @@ void app_main(void)
         ESP_LOGE(TAG, "http_srv_start failed");
     }
 
-    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, tz, config, sensor, sd, flash, http)");
+    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, rtc, tz, config, sensor, sd, flash, http)");
     cli_start();   /* blocks forever: REPL on USB-Serial/JTAG */
 }

@@ -10,6 +10,14 @@ void clock_health_sync(clock_health_t *h, int64_t now_us)
     h->ever_synced = h->source_synced = true;
     h->last_sync_us = now_us;
 }
+bool clock_health_seed_rtc(clock_health_t *h, int64_t now_us, uint32_t age_s)
+{
+    if (h->ever_synced || age_s >= CLOCK_HOLDOVER_S) return false;
+    h->ever_synced = true;
+    h->source_synced = false;
+    h->last_sync_us = now_us - (int64_t)age_s * 1000000;
+    return true;
+}
 uint32_t clock_health_age(const clock_health_t *h, int64_t now_us)
 {
     if (!h->ever_synced || now_us <= h->last_sync_us) return 0;

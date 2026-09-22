@@ -47,6 +47,11 @@ target_include_directories(test_clock_health PRIVATE ../common)
 target_compile_options(test_clock_health PRIVATE -UNDEBUG)
 add_test(NAME clock_health COMMAND test_clock_health)
 
+add_executable(test_rtc_clock tests/test_rtc_clock.c ../common/rtc_clock.c)
+target_include_directories(test_rtc_clock PRIVATE ../common)
+target_compile_options(test_rtc_clock PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME rtc_clock COMMAND test_rtc_clock)
+
 add_executable(test_network_managers tests/test_network_managers.c
   tests/fakes/fake_idf.c ../firmware/main/sntp_mgr.c ../firmware/main/wifi_mgr.c
   ../common/clock_health.c)

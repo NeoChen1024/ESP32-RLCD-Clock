@@ -11,6 +11,7 @@ static void (*policy_cb)(void *);
 static void (*timer_cb)(void *);
 static bool in_core;
 const char *WIFI_EVENT = "wifi", *IP_EVENT = "ip";
+void rtc_mgr_on_sync(int64_t utc_sec) { (void)utc_sec; }
 static struct { esp_event_base_t base; void (*fn)(void *, esp_event_base_t, int32_t, void *); } handlers[3];
 static unsigned handler_count;
 static struct { esp_event_base_t base; int32_t id; unsigned char data[128]; } events[64];

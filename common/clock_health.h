@@ -18,6 +18,9 @@ typedef struct {
 
 void clock_health_select(clock_health_t *h, int64_t now_us);
 void clock_health_sync(clock_health_t *h, int64_t now_us);
+/* Seed from an RTC whose persisted last-sync age was validated at boot.
+ * The source is not fresh until an actual SNTP callback occurs. */
+bool clock_health_seed_rtc(clock_health_t *h, int64_t now_us, uint32_t age_s);
 uint32_t clock_health_age(const clock_health_t *h, int64_t now_us);
 bool clock_health_trusted(const clock_health_t *h, int64_t now_us);
 bool clock_health_fresh(const clock_health_t *h, int64_t now_us);

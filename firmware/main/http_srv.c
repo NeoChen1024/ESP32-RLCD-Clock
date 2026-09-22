@@ -96,12 +96,13 @@ static esp_err_t handler_status(httpd_req_t *req)
                   wstate, w.ssid, w.ip, w.rssi_dbm);
     n += snprintf(body + n, sizeof body - (size_t)n,
                   "\"sntp\":{\"started\":%s,\"synced\":%s,\"trusted\":%s,"
-                  "\"fresh\":%s,\"age_s\":%lu,\"source\":\"%s\",\"unix\":%lld},"
+                  "\"fresh\":%s,\"rtc_seeded\":%s,\"age_s\":%lu,\"source\":\"%s\",\"unix\":%lld},"
                   "\"display_frames\":%lu}",
                   s.started ? "true" : "false",
                   s.synced ? "true" : "false",
                   s.time_trusted ? "true" : "false",
                   s.fresh ? "true" : "false",
+                  s.rtc_seeded ? "true" : "false",
                   (unsigned long)s.ntp_age_s,
                   s.using_manual ? "manual" : s.using_config ? "config" :
                   s.using_dhcp ? "dhcp" : "fallback",

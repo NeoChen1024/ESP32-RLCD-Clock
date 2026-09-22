@@ -1,8 +1,9 @@
 # RLCD Time Scale Monitor — Implementation Notes
 
 Design reference for a Waveshare ESP32-S3 RLCD 4.2 time-scale instrument. It
-currently uses Wi-Fi SNTP with bounded ESP32 system-clock holdover; PCF85063
-RTC integration is planned. The 400×300 reflective monochrome display shows
+uses Wi-Fi SNTP with bounded ESP32 system-clock holdover. The PCF85063A can
+restore trusted time across a reboot within the 24-hour last-sync policy.
+The 400×300 reflective monochrome display shows
 ISO-8601 civil time, UTC, TAI-based MJD, GPS Week/TOW, sync state,
 temperature/humidity, battery and Wi-Fi status.
 
@@ -30,9 +31,9 @@ battery ADC = ADC1_CH3 (GPIO4, divider ×3).
 During the original bring-up no RTC backup battery was installed; its current
 physical state has not been rechecked. Main power comes from the 18650, and
 Wi-Fi/SNTP can re-acquire trusted time after boot. Without backup power, a
-removed or depleted 18650 would also let the PCF85063 lose time. Firmware
-therefore masks precise MJDTAI/GPS values until a trusted sync; reading the
-PCF85063 itself remains future work.
+removed or depleted 18650 could also let the PCF85063A lose time. The
+oscillator-stop flag then invalidates RTC boot trust. Firmware masks precise
+MJDTAI/GPS values until a verified RTC boot or an SNTP sync.
 
 Sync state codes:
 
@@ -41,7 +42,7 @@ BOOT UNS   booted, trusted time not yet acquired
 SYNC...    syncing
 NTP OK     SNTP/NTP synced, time trusted
 RTC HOLD   relying on RTC or system clock holdover
-WIFI LOST  Wi-Fi down, still within trusted system-clock holdover
+WIFI LOST  Wi-Fi down, still within trusted RTC-seeded or system-clock holdover
 TIME UNS   last successful sync is too old (24 h)
 ```
 
@@ -181,8 +182,9 @@ limits are product policy, not an accuracy guarantee.
 `NTP OK` requires the current source to have synced recently and the network
 to be up. Otherwise trusted system time shows `RTC HOLD` (network up) or
 `WIFI LOST` (network down). At 24 h it becomes `TIME UNS` and fields are
-masked. `RTC HOLD` currently means ESP32 system-clock holdover; PCF85063 is
-still unimplemented. Manual resync/server changes preserve last-good trust
+masked. After a verified RTC boot, `RTC HOLD`/`WIFI LOST` may use RTC-seeded
+system time; after SNTP, they use ESP32 system-clock holdover. Manual
+resync/server changes preserve last-good trust
 while waiting for the new source. Cold boot remains unsafe until first sync.
 ISO week uses the UTC date; the top-bar civil date uses the local offset.
 
@@ -287,6 +289,7 @@ sntp_mgr        lwIP SNTP; CLI > selected SD/flash config > DHCP > pool [impleme
 storage/config  SD + internal FAT, version selection and TZ/NTP application [implemented]
 http_srv        esp_http_server: homepage, files API, status, snapshots [implemented]
 sensor frontend SHTC3 + battery ADC, read on each display frame     [implemented]
+rtc_mgr         PCF85063A boot seed + queued SNTP-to-RTC writes     [implemented]
 CLI             linenoise REPL over USB-Serial/JTAG console          [implemented]
 alarm_task      compare local time against SD-loaded alarm schedule; trigger audio on match  [future]
 button_task     debounce; short press = dismiss ringing alarm, long press = force resync     [future]
@@ -334,6 +337,7 @@ wifi status | wifi disconnect | wifi reconnect
 ntp status | ntp server <host|ip> | ntp reset | ntp resync
 tz [±HH:MM | ±HHMM | minutes | reset]      show/set local offset (default UTC+8)
 config status | config reload               inspect/reselect SD/flash config
+rtc [status]                               inspect RTC/boot trust checks
 sensor                                   read SHTC3 + battery ADC live
 sd status | mount | unmount | ls [dir] | cat <file> | test | format
 flash status | mount | init
@@ -360,8 +364,8 @@ Only a selected config with an `ntp_server` key takes precedence over DHCP.
 the host OS — see §8.1 (picolibc has no `tm_gmtoff`). A CLI override is
 RAM-only; `tz reset` returns to the selected config value.
 
-Future commands from the original design (RTC read/write, alarm
-schedule) are not yet implemented.
+Direct RTC set/alarm scheduling commands from the original design are not
+implemented. RTC reads for diagnostics and SNTP-driven writes are implemented.
 
 ### 8.5 HTTP debug snapshot
 
@@ -488,6 +492,38 @@ before Wi-Fi was connected. Deleting only the test versions stepped through
 older SD files, then internal flash, then UTC+8 defaults; the test versions
 were removed afterward. Host CTest passed 7/7.
 
+### 8.7 PCF85063A RTC boot holdover
+
+The RTC shares the I²C bus on GPIO13/14 with the SHTC3 and uses address 0x51.
+After each SNTP callback, a separate FreeRTOS task writes UTC to the RTC;
+the callback only queues a notification, avoiding blocking I²C or NVS work
+on lwIP's tcpip thread. The driver reads back and validates the calendar
+before setting the RTC's RAM-byte marker (`0xA5`). NVS stores only a
+`last_sync` UTC checkpoint, at most once every six hours under normal sync;
+Wi-Fi credentials, CLI overrides and user config do not go there. The
+checkpoint can be conservative by up to six hours after a reboot.
+
+At boot, the RTC is accepted only if I²C succeeds, its oscillator-stop and
+STOP flags are clear, it uses 24-hour mode, the BCD date and weekday are
+valid, the marker is present, and its UTC time is between the NVS checkpoint
+and that checkpoint plus 24 hours. This seeds the ESP32 system clock and
+monotonic holdover age; it is not counted as an SNTP synchronization and is
+never marked fresh. An invalid or expired RTC leaves time fields masked until
+SNTP succeeds. The PCF85063A's two-digit year limits this implementation to
+2000–2099. `rtc status` exposes the checks; `/status` exposes `rtc_seeded`.
+The [NXP PCF85063A data sheet](https://www.nxp.com/docs/en/data-sheet/PCF85063A.pdf)
+defines the OS flag, RAM byte, BCD registers and I²C address.
+
+Hardware verification (2026-09-23): before the first calibration, the RTC's
+OS flag was set and no NVS checkpoint existed, so boot time was not trusted.
+After SNTP, `rtc status` showed a valid calendar, marker and checkpoint.
+Reflashing/rebooting with NVS intact produced `used at boot: yes`; before
+Wi-Fi connection, `ntp status` showed `synced: no`, `trusted: yes`, `fresh:
+no`, with a 65-second holdover age. Reconnecting Wi-Fi then synchronized NTP
+and restored `fresh: yes`. Current host CTest passes 8/8, covering invalid
+BCD/calendar/OS and the 24-hour eligibility boundary; a 24-hour real-time
+outage was not run.
+
 ---
 
 ## 9. Project layout
@@ -497,16 +533,16 @@ ESP32-RLCD/
   AGENTS.md             environment + bring-up notes
   common/               shared pure-C render, clock and storage code
     time_model.{h,c} render_faces.{h,c} frame_export.{h,c}
-    clock_health.{h,c} storage_files.{h,c} display_geometry.h
+    clock_health.{h,c} rtc_clock.{h,c} storage_files.{h,c} display_geometry.h
   host/                 SDL3 simulator (build: cmake -S host -B host/build)
     src/                host-only platform code: main.c, host_time.c,
                         sdl3_backend.{h,c}, u8g2_selected_fonts.c
-    tests/              seven host tests, including fake-IDF network and config cases
+    tests/              eight host tests, including RTC, fake-IDF network and config cases
   firmware/             ESP-IDF target (idf.py -p <detected-port> build flash)
     main/               app_main.c, cli.c, wifi_mgr.{h,c}, sntp_mgr.{h,c},
                         model.{h,c}, sensors.{h,c}, display.{h,c}, render.{h,c},
                         snapshot.{h,c}, http_srv.{h,c}, http_files.{h,c},
-                        storage_mgr.{h,c}, config_mgr.{h,c}, home.html,
+                        storage_mgr.{h,c}, config_mgr.{h,c}, rtc_mgr.{h,c}, home.html,
                         files.html, web_style.css
     partitions.csv      4 MiB app + 8 MiB wear-levelled FAT
     components/
@@ -560,7 +596,7 @@ flashed to the RLCD 4.2 board and confirmed over CLI/HTTP/panel.
 3. ⚠️ **Fonts and icons** — uses stock u8g2 fonts (inr42/VCR_OSD/7x13) on both platforms; no custom BDF pipeline or icon font yet
 4. ✅ **Main face layout** — single-face layout, screenshot export (host PNG/PBM/BMP; golden screenshot review not automated)
 5. ✅ **ESP32 bring-up** — ESP-IDF v6.0.2 app, u8g2 as IDF component, ST7305 SPI init/flush (vendor backend), 1 Hz display task, CLI, HTTP debug snapshot. **Verified on hardware.**
-6. ⚠️ **Time sync and RTC** — Wi-Fi/SNTP sync, NTP age, DHCP option-42 + manual + fallback servers all verified; boot-unsafe gating, system-clock holdover/expiry, reconnect and DHCP fallback/retry implemented; PCF85063 RTC read/write and RTC-backed boot holdover NOT built
+6. ⚠️ **Time sync and RTC** — Wi-Fi/SNTP sync, NTP age, DHCP option-42 + manual + fallback servers, boot-unsafe gating, system-clock holdover/expiry, reconnect and DHCP fallback/retry implemented. PCF85063A read/write and RTC-backed boot holdover verified; drift calibration and battery-backed full power-loss verification remain.
 7. ✅ **Sensors and telemetry** — SHTC3 (I2C, CRC-8 verified) + battery ADC (curve-fitted, divider ×3) + real Wi-Fi RSSI. **Verified on hardware** (31.7 °C / 53 %RH / 4.06 V / −43 dBm).
 8. ⚠️ **Storage** — SD FAT, internal wear-levelled FAT, CLI mount/status/format diagnostics, English HTTP file page + GET/PUT/DELETE API and recoverable replacements implemented. Versioned SD-first config selection and TZ/`ntp_server` application are verified; time-scale offsets, alarms and sound loading remain pending (§8.6).
 9. ⚠️ **Polish** — basic Wi-Fi-lost/unsafe visuals and trust-mask rendering regression implemented; low-battery warnings, full golden screenshots and power behavior tuning remain
@@ -613,7 +649,8 @@ Backward-step hardware injection was inconclusive because JTAG reset/halt
 interfered with execution; only the host regression verifies that case.
 The debugger was stopped and the board restored to normal DHCP synchronization.
 
-Remaining: PCF85063, sensor validity/staleness, time-scale offset config, alarm/button/audio,
+Remaining: RTC drift calibration/full power-loss test, sensor validity/staleness,
+time-scale offset config, alarm/button/audio,
 full screenshot parity, power tuning. `firmware/partitions.csv` now allocates
 a 4 MiB factory app at 0x10000 and an 8 MiB wear-levelled FAT partition at
 0x410000 on the 16 MiB flash, preserving NVS/PHY offsets. Remaining flash is
@@ -647,7 +684,7 @@ status in §11.
 Product         RLCD Time Scale Monitor
 Display         400×300 landscape monochrome (RLCD: bit 0 = ink/black)
 Primary source  Wi-Fi SNTP (CLI > SD/flash config > DHCP option 42 > pool fallback)
-Holdover        ESP32 system time after sync (PCF85063 RTC not yet wired)
+Holdover        ESP32 system time after sync; PCF85063A-seeded system time after verified reboot (<24 h)
 Main fields     local time, UTC, MJD(TAI), GPS week/TOW, ISO week
 Aesthetic       fixed-width time-scale telemetry instrument
 GUI framework   no LVGL
