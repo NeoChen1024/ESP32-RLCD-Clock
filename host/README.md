@@ -100,6 +100,8 @@ sensor sample expiry/recovery, masking invalid telemetry and untrusted time,
 and file-path/content validation with
 interrupted FAT replacement recovery. They also test SD-first config version
 selection and fallback to internal flash/defaults, config cleanup, plus RTC calendar decoding
-and the 24-hour boot trust limit. Storage tests link the
+the 24-hour boot trust limit, the INVALID/TRUSTED/RTC_HOLD time state with
+its build-time window and RTC drift tolerance, and rejection of implausible
+SNTP results. Storage tests link the
 system libcjson package through pkg-config. The fake transport exercises the
 actual manager sources but does not emulate radio/RTOS/network timing.

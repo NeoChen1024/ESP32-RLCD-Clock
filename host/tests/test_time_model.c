@@ -26,7 +26,7 @@ int main(void)
     clock_model_t m;
     memset(&m, 0, sizeof m);
     m.unix_ms = 1782055035LL * 1000LL;
-    m.time_trusted = true;
+    m.time_valid = true;
     m.tai_minus_utc_s = TAI_MINUS_UTC_BUILTIN_S;
 
     int64_t day, frac;
@@ -69,7 +69,7 @@ int main(void)
     /* epoch anchor: 1970-01-01 = Thursday */
     memset(&m, 0, sizeof m);
     m.unix_ms = 0;
-    m.time_trusted = true;
+    m.time_valid = true;
     civil_fields(&m, 0, &y,&mo,&d,&wd,&h,&mi,&s);
     printf("epoch: %04d-%02d-%02d %s %02d:%02d:%02d\n", y,mo,d,wdn[wd],h,mi,s);
     if (!(y==1970 && mo==1 && d==1 && wd==3)) { printf("FAIL epoch weekday (expect THU)\n"); ok=0; }

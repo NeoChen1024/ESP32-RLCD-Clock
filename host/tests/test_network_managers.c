@@ -70,7 +70,19 @@ int main(void)
     assert(sntp_mgr_status().time_trusted && !sntp_mgr_status().fresh);
     fake_advance((CLOCK_HOLDOVER_S - CLOCK_FRESH_S) * 1000000LL);
     assert(sntp_mgr_status().synced && !sntp_mgr_status().time_trusted);
+    /* Past 24 h the RTC cross-check decides between RTC_HOLD and INVALID. */
+    assert(sntp_mgr_status().time_state == CLOCK_INVALID && !sntp_mgr_status().time_valid);
+    fake_rtc_hold_ok = true;
+    assert(sntp_mgr_status().time_state == CLOCK_RTC_HOLD && sntp_mgr_status().time_valid);
+    fake_rtc_hold_ok = false;
+    /* Implausible server times never reach the clock or the trust state. */
+    unsigned sets = fake_clock_sets;
+    fake_sync_at(clock_build_epoch() - 1);
+    fake_sync_at(clock_build_epoch() + CLOCK_PLAUSIBLE_SPAN_S + 1);
+    assert(fake_clock_sets == sets && sntp_mgr_status().rejected == 2);
+    assert(sntp_mgr_status().time_state == CLOCK_INVALID);
     fake_sync();
+    assert(fake_clock_sets == sets + 1 && sntp_mgr_status().time_state == CLOCK_TRUSTED);
     assert(sntp_mgr_status().fresh);
 
     /* A selected config outranks DHCP, but a manual server outranks config. */
@@ -210,5 +222,5 @@ int main(void)
     scans = fake_scan_calls;
     fake_advance(400000000); fake_wifi_tick();
     assert(fake_scan_calls == scans);
-    puts("SNTP selection, trust, DHCP recovery, Wi-Fi lifecycle and known-network scanning OK");
+    puts("SNTP selection, time state, plausibility, DHCP recovery, Wi-Fi lifecycle and known-network scanning OK");
 }

@@ -23,9 +23,17 @@ when one is installed, otherwise from the built-in current-era value of 37
 seconds; GPS−UTC is always TAI−UTC − 19 seconds. Local time comes from a
 POSIX TZ rule evaluated at each frame's instant, so daylight-time rules apply
 without zoneinfo files. Both values are carried in `clock_model_t`. The date/time
-fields are masked whenever `time_trusted` is false. `RTC HOLD` on the face
-means trusted system-clock holdover, which may have been seeded from the
-external RTC at boot; it does not imply continuous reads from the RTC.
+fields are masked only in the INVALID time state (see below). The top bar
+shows the following labels:
+
+| Label | Time state | Meaning |
+| --- | --- | --- |
+| `NTP OK` | TRUSTED | The current source synced within 2 h. |
+| `HOLDOVER` | TRUSTED | The last sync was 2–24 h ago and Wi-Fi is up. |
+| `WIFI LOST` | TRUSTED | Wi-Fi is down. |
+| `RTC HOLD` | RTC_HOLD | Over 24 h without a sync. |
+| `SYNC...` or `BOOT UNS` | INVALID | Waiting for the first time source. |
+| `TIME UNS` | INVALID | Time was obtained but has since failed its checks. |
 
 SHTC3 temperature/humidity and the battery ADC have separate validity flags
 from time trust. A failed SHTC3 read may reuse its last good sample for up to
@@ -52,19 +60,44 @@ SNTP server
 selection is manual CLI override, then the selected config's `ntp_server`,
 then DHCP option 42, then `pool.ntp.org`. A DHCP server that fails to sync
 within about 18 seconds yields to the pool and is retried every five minutes.
-SNTP callback history uses monotonic time: the active source is fresh for
-two hours after a successful sync; system time remains trusted as holdover for
-less than 24 hours. Changing server or reconnecting does not erase a still
-valid last-good sync.
+SNTP callback history uses monotonic time. The active source is fresh for
+two hours after a successful sync. Changing server or reconnecting does not
+erase a still-valid last-good sync.
+
+Time has one of three states (`clock_state_t` in `common/clock_health.h`).
+That state alone decides display masking and whether events run:
+
+- **INVALID**: no usable time source this boot; or the wall time lies
+  outside [build time, build time + 10 years]; or the RTC check fails after
+  24 h without a sync.
+- **TRUSTED**: synchronized within the last 24 h. An RTC boot whose NVS
+  last-sync checkpoint is younger than 24 h also counts.
+- **RTC_HOLD**: more than 24 h without a sync, or an RTC boot with a
+  missing or older checkpoint, while the RTC cross-check passes. The face
+  shows time normally under `RTC HOLD`, and events still run.
+
+The build time is `RLCD_BUILD_EPOCH`. CMake sets it at configure time, and
+`SOURCE_DATE_EPOCH` can pin it for reproducible builds. A stale value only
+widens the window. `sntp_mgr` overrides lwIP's weak `sntp_sync_time()`, so an
+SNTP result outside the window is counted in `rejected` and never sets the
+clock or the trust state. This also guards against a bad DHCP option-42
+server.
+
+The RTC cross-check runs every minute in the RTC task. It passes when the
+RTC is running (oscillator-stop flag clear), has a valid calendar, carries
+the application marker, falls inside the build window, and differs from the
+system clock by no more than the larger of 60 s or 50 ppm of the time since
+the two clocks were last aligned. They are aligned by a verified RTC write
+after SNTP, or when the RTC sets the clock at boot.
 
 The PCF85063A is written after SNTP synchronization by a separate task, so
 the lwIP callback does not perform I²C or NVS writes. NVS holds a bounded
 last-sync checkpoint; no user settings are stored there. At boot, the RTC may
-seed system time only when its oscillator-stop flag, calendar and application
-marker are valid and its time is less than 24 hours after that checkpoint.
-This is trusted holdover but is not counted as an SNTP sync or a fresh source.
-If the RTC is unavailable or invalid, boot time remains untrusted until SNTP
-succeeds. Full power-loss behavior without an RTC backup cell is documented in
+seed system time when its oscillator-stop flag, calendar and application
+marker are valid and its time is inside the build window. With a checkpoint
+younger than 24 hours the boot state is TRUSTED (not counted as an SNTP sync
+or a fresh source); otherwise it is RTC_HOLD. If the RTC is unavailable or
+invalid, boot time stays INVALID until SNTP succeeds. Full power-loss behavior without an RTC backup cell is documented in
 [hardware notes](hardware_notes.md#rtc-power-and-verification-boundary).
 
 ## Storage and configuration

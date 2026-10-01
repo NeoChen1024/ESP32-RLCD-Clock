@@ -25,19 +25,21 @@
 #define UNIX_TO_GPS_EPOCH_S   315964800LL
 #define MJD_EPOCH_UNIX_MS     (40587LL * 86400000LL)   /* MJD at the Unix epoch, in ms */
 
-/* Sync / trust state. Host simulator always starts NTP_OK. */
+/* Top-bar sync label. Host simulator always starts NTP_OK. The underlying
+ * time state (clock_health.h) decides time_valid; this adds the detail. */
 typedef enum {
-    SYNC_BOOT_UNS = 0,
-    SYNC_SYNCING,
-    SYNC_NTP_OK,
-    SYNC_RTC_HOLD,
-    SYNC_WIFI_LOST,
-    SYNC_TIME_UNSAFE,
+    SYNC_BOOT_UNS = 0,  /* INVALID: no time yet, Wi-Fi idle */
+    SYNC_SYNCING,       /* INVALID: waiting for the first SNTP sync */
+    SYNC_NTP_OK,        /* TRUSTED: current source synced within 2 h */
+    SYNC_HOLDOVER,      /* TRUSTED: last sync 2..24 h ago, Wi-Fi up */
+    SYNC_WIFI_LOST,     /* TRUSTED: Wi-Fi down */
+    SYNC_RTC_HOLD,      /* RTC_HOLD: over 24 h, RTC cross-check passing */
+    SYNC_TIME_UNSAFE,   /* INVALID: time lost or failed its sanity checks */
 } sync_state_t;
 
 typedef struct {
     int64_t  unix_ms;
-    bool     time_trusted;
+    bool     time_valid;      /* TRUSTED or RTC_HOLD: show time, run events */
     sync_state_t sync;
     uint32_t ntp_age_s;
     int      wifi_rssi_dbm;

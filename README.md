@@ -5,8 +5,11 @@ monochrome 400×300 display showing local time, UTC, MJD(TAI), GPS week/TOW,
 ISO week date, sync state and telemetry, in a fixed-width instrument aesthetic.
 
 Primary time source is Wi-Fi SNTP. After a successful sync, the ESP32 system
-clock provides bounded holdover. The PCF85063A RTC can restore trusted time
-across a reboot while the last verified SNTP sync is less than 24 hours old.
+clock provides holdover. Time is TRUSTED within 24 hours of a sync. After
+that it is RTC_HOLD while the PCF85063A agrees with the system clock, and
+otherwise INVALID. Wall time outside [build time, build time + 10 years] is
+always INVALID. An RTC boot restores TRUSTED time with a checkpoint under
+24 hours, and RTC_HOLD otherwise.
 No GNSS or PPS. TAI−UTC comes from an uploaded IERS `leap-seconds.list` when
 one verifies, otherwise from a built-in current-era value.
 
@@ -100,12 +103,15 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   One-off SHTC3 failures retain the last sample for up to 10 seconds; after
   that, temperature/humidity show `n/a` until a new valid reading. Battery
   ADC failure shows `n/a` immediately instead of a misleading 0 V.
-- **RTC holdover**: PCF85063A on the shared I²C bus is updated after SNTP
-  synchronization. A boot read is accepted only when its oscillator-stop flag
-  is clear, its calendar and RAM marker are valid, and its time is less than
-  24 hours after the NVS last-sync checkpoint. `rtc status` shows these checks.
-  A valid RTC boot is trusted holdover, not a fresh SNTP synchronization;
-  invalid or stale RTC data leaves time fields masked until SNTP succeeds.
+- **RTC holdover**: the PCF85063A on the shared I²C bus is updated after
+  each SNTP synchronization.
+  - At boot, a running, marked RTC inside the build window sets the clock:
+    TRUSTED if the NVS last-sync checkpoint is under 24 hours old,
+    otherwise RTC_HOLD.
+  - The RTC is cross-checked against the system clock every minute.
+  - `rtc status` shows the checks, and `ntp status` shows the time state
+    and any rejected SNTP results.
+  - Invalid RTC data leaves time fields masked until SNTP succeeds.
 - **SD card**: FAT on 1-bit SDMMC (CLK=38 CMD=21 D0=39, 20 MHz), mounted
   at `/sdcard` without auto-formatting. CLI: `sd status`, `sd ls [dir]`,
   `sd cat <file>` (4 KiB preview), `sd test` (temporary-file round trip),
@@ -124,7 +130,7 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   then internal flash) > DHCP option 42 > pool.ntp.org, with a watchdog that reverts to the pool if
   the DHCP-provided server cannot sync within 18 s, and retries DHCP every
   5 minutes. Last-good trust survives resync; age uses monotonic time, with
-  2 h freshness and 24 h maximum holdover. Stays on the lwIP SNTP
+  2 h freshness and 24 h TRUSTED holdover before RTC_HOLD. Stays on the lwIP SNTP
   client — full NTP/xleave is outside the agreed scope (see
   [implementation notes](rlcd_time_scale_monitor_implementation_notes.md)).
 

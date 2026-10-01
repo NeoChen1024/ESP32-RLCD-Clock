@@ -23,6 +23,7 @@ static bool s_started, s_online, s_manual, s_config, s_dhcp_dirty;
 static source_t s_source;
 static clock_health_t s_health;
 static bool s_ntp_synced, s_rtc_seeded;
+static uint32_t s_rejected;
 static char s_manual_name[64];
 static char s_config_name[64];
 static char s_name[64] = "pool.ntp.org";
@@ -36,6 +37,21 @@ static void on_sync_time(struct timeval *tv)
     s_ntp_synced = true;
     rtc_mgr_on_sync(tv->tv_sec);
     ESP_LOGI(TAG, "SNTP synchronized (%s)", s_name);
+}
+
+/* Overrides lwIP's weak hook so an implausible server time never reaches
+ * the system clock (runs in tcpip_thread, like the rest of this module). */
+void sntp_sync_time(struct timeval *tv)
+{
+    if (!clock_wall_plausible(tv->tv_sec, clock_build_epoch())) {
+        s_rejected++;
+        ESP_LOGW(TAG, "rejected SNTP time %lld from %s: outside the build window",
+                 (long long)tv->tv_sec, s_name);
+        return;
+    }
+    settimeofday(tv, NULL);
+    sntp_set_sync_status(SNTP_SYNC_STATUS_COMPLETED);
+    on_sync_time(tv);
 }
 
 static void select_source(source_t source)
@@ -112,8 +128,7 @@ static void start_core(void *arg)
 {
     (void)arg;
     if (s_started) return;
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_set_time_sync_notification_cb(on_sync_time);
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);   /* sync results arrive via sntp_sync_time() */
     s_started = true;
     select_preferred();
     sys_timeout(1000, policy_tick, NULL);
@@ -141,6 +156,13 @@ bool sntp_mgr_seed_rtc(uint32_t age_s)
     run_core(seed_rtc_core, &seed);
     return seed.accepted;
 }
+static void seed_rtc_hold_core(void *arg)
+{
+    (void)arg;
+    clock_health_seed_rtc_hold(&s_health);
+    s_rtc_seeded = true;
+}
+void sntp_mgr_seed_rtc_hold(void) { run_core(seed_rtc_hold_core, NULL); }
 
 static void network_core(void *arg)
 {
@@ -209,7 +231,7 @@ static void status_core(void *arg)
     st->started = s_started;
     st->synced = s_ntp_synced;
     st->rtc_seeded = s_rtc_seeded;
-    st->time_trusted = clock_health_trusted(&s_health, now);
+
     st->fresh = s_online && clock_health_fresh(&s_health, now);
     st->ntp_age_s = clock_health_age(&s_health, now);
     st->using_manual = s_source == SOURCE_MANUAL;
@@ -221,6 +243,10 @@ static void status_core(void *arg)
     gettimeofday(&tv, NULL);
     st->unix_sec = tv.tv_sec;
     st->unix_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    st->time_state = clock_health_state(&s_health, now, st->unix_sec, rtc_mgr_hold_ok());
+    st->time_trusted = st->time_state == CLOCK_TRUSTED;
+    st->time_valid = st->time_state != CLOCK_INVALID;
+    st->rejected = s_rejected;
 }
 sntp_mgr_status_t sntp_mgr_status(void)
 {

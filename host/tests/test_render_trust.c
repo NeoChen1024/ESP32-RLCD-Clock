@@ -24,7 +24,7 @@ int main(int argc, char **argv)
         u8g2_SendBuffer(&g);
         assert(sdl3_backend_save_png(argv[1]));
     }
-    m.time_trusted = true;
+    m.time_valid = true;
     render_face(&g, &m);
     assert(memcmp(first, u8g2_GetBufferPtr(&g), sizeof first));
     memcpy(first, u8g2_GetBufferPtr(&g), sizeof first);

@@ -24,7 +24,12 @@ char *ipaddr_ntoa_r(const ip_addr_t *, char *, int);
 #define SNTP_MAX_SERVERS 1
 #define SNTP_OPMODE_POLL 0
 void sntp_setoperatingmode(uint8_t);
-void sntp_set_time_sync_notification_cb(void (*)(struct timeval *));
+#define SNTP_SYNC_STATUS_COMPLETED 1
+void sntp_set_sync_status(int);
+/* sntp_mgr sets the clock after its plausibility check; keep the host's. */
+int fake_settimeofday(const struct timeval *, const void *);
+#define settimeofday fake_settimeofday
+bool rtc_mgr_hold_ok(void);
 void sntp_stop(void);
 void sntp_init(void);
 void sntp_setserver(uint8_t, const ip_addr_t *);
@@ -82,7 +87,10 @@ void xSemaphoreTake(SemaphoreHandle_t, int);
 void xSemaphoreGive(SemaphoreHandle_t);
 
 void fake_advance(int64_t us);
-void fake_sync(void);
+void fake_sync(void);                 /* plausible server time */
+void fake_sync_at(int64_t unix_s);    /* arbitrary server time */
+extern bool fake_rtc_hold_ok;
+extern unsigned fake_clock_sets;
 void fake_dhcp(uint32_t ip);
 void fake_event(esp_event_base_t, int32_t, void *);
 void fake_drain(void);

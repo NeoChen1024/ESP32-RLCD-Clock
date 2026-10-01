@@ -98,7 +98,8 @@ static int cmd_ntp(int argc, char **argv)
         sntp_mgr_status_t st = sntp_mgr_status();
         printf("started: %s\n", st.started ? "yes" : "no");
         printf("synced:  %s\n", st.synced ? "yes" : "no");
-        printf("trusted: %s\n", st.time_trusted ? "yes" : "no");
+        printf("time:    %s\n", clock_state_name(st.time_state));
+        if (st.rejected) printf("rejected: %lu implausible SNTP results\n", (unsigned long)st.rejected);
         printf("fresh:   %s\n", st.fresh ? "yes" : "no");
         printf("age:     %lu s\n", (unsigned long)st.ntp_age_s);
         printf("source:  %s\n", st.using_manual ? "manual" :
@@ -168,7 +169,7 @@ static int cmd_tz(int argc, char **argv)
         bool cli, dst;
         model_tz_get(&rule, &cli);
         printf("tz rule: %s (%s)\n", rule.text, cli ? "CLI override" : "selected config");
-        if (sntp_mgr_status().time_trusted) {
+        if (sntp_mgr_status().time_valid) {
             print_offset("now:     ", tz_rule_offset_minutes(&rule, time(NULL), &dst));
             printf("%s\n", dst ? " daylight" : "");
         }
@@ -259,7 +260,7 @@ static int cmd_leap(int argc, char **argv)
         printf("table:   %s/%s\n", info.volume, LEAP_MGR_RELATIVE);
         print_utc_date("updated: ", info.updated_unix_s);
         print_utc_date("expires: ", info.expires_unix_s);
-        printf("state:   %s\n", !s.time_trusted ? "unknown (time untrusted)" :
+        printf("state:   %s\n", !s.time_valid ? "unknown (time invalid)" :
                s.unix_sec >= info.expires_unix_s ? "EXPIRED, holding last TAI-UTC" : "current");
     } else {
         printf("table:   none; built-in TAI-UTC %d s\n", TAI_MINUS_UTC_BUILTIN_S);
@@ -410,9 +411,11 @@ static int cmd_rtc(int argc, char **argv)
     printf("present: %s\noscillator stopped: %s\nmarker valid: %s\ncalendar valid: %s\n",
            st.present ? "yes" : "no", st.oscillator_stopped ? "yes" : "no",
            st.marker_valid ? "yes" : "no", st.calendar_valid ? "yes" : "no");
-    printf("checkpoint: %s\nboot eligible: %s\nused at boot: %s\n",
+    printf("checkpoint: %s\nboot trusted: %s\nused at boot: %s\n",
            st.anchor_valid ? "yes" : "no", st.eligible ? "yes" : "no",
            st.boot_used ? "yes" : "no");
+    printf("hold check: %s (system-RTC %+lld s, %llu s since aligned)\n", st.hold_ok ? "pass" : "fail",
+           (long long)st.hold_diff_s, (unsigned long long)st.hold_since_s);
     if (st.calendar_valid) {
         time_t t = (time_t)st.utc_sec;
         struct tm tm;

@@ -12,6 +12,7 @@ primary home:
 - `README.md` and `host/README.md`: supported build and usage instructions.
 - `docs/architecture.md`: current rendering, time-trust and storage contract.
 - `docs/hardware_notes.md`: board wiring, panel behavior and power boundary.
+- `docs/events.md`: agreed event/alarm scheduling design until implemented.
 - `rlcd_time_scale_monitor_implementation_notes.md`: remaining work and
   explicitly agreed scope.
 - This file: local build/bring-up steps and invariants agents must preserve.
@@ -83,10 +84,17 @@ host/build/rlcd_host --png out.png  # headless; also --pbm / --bmp
   flash. The HTTP API does not overwrite an existing config version. The
   private `.rlcd-txn` journal is recovered under the storage lock; ordinary
   mounts must never auto-format either volume.
-- RTC boot trust requires the PCF85063A oscillator-stop flag to be clear, a
-  valid calendar and RAM marker, and an age under the 24-hour NVS checkpoint
-  policy. The current board has no RTC backup battery; true power-loss
-  retention remains unverified.
+- Time state is INVALID, TRUSTED or RTC_HOLD (`common/clock_health`). It is
+  the only input to display masking and event scheduling.
+  - Wall time outside [build, build + 10 years] is INVALID, and SNTP
+    results outside that window are rejected before they set the clock.
+  - An RTC boot needs the oscillator-stop flag clear, a valid calendar, the
+    RAM marker and the build window. It is TRUSTED with an NVS checkpoint
+    under 24 hours, and RTC_HOLD otherwise.
+  - RTC_HOLD holds only while the per-minute RTC cross-check passes: within
+    60 s or 50 ppm of the time since the clocks were aligned.
+  - The current board has no RTC backup battery; true power-loss retention
+    remains unverified.
 - Local time is a POSIX TZ rule (`common/tz_rule.c`), not zoneinfo; POSIX
   offsets count west, while CLI and legacy `tz_offset_minutes` offsets count
   east. A `time/leap-seconds.list` is used only after its SHA-1 line and

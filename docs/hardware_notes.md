@@ -51,7 +51,8 @@ No RTC backup battery is installed or currently available. The 18650 or USB
 power can keep the board running, but a full loss of RTC power can stop its
 oscillator. The PCF85063A oscillator-stop (OS) flag then invalidates a boot
 time read; the firmware does not treat an unverified date as trusted time.
-RTC-seeded boot holdover works while RTC power is maintained. Independent
+RTC-seeded boot works while RTC power is maintained (TRUSTED or RTC_HOLD,
+see [architecture](architecture.md#time-acquisition-and-trust)). Independent
 backup operation across a true power loss is **unverified** and deferred
 until a backup battery is available.
 

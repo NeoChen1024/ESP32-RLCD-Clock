@@ -20,11 +20,16 @@
  * shows slot zero's current address. Current builds configure one slot.
  */
 
+#include "clock_health.h"
+
 typedef struct {
     bool started;
     bool synced;            /* at least one successful sync this boot */
     bool rtc_seeded;        /* boot time came from the RTC before SNTP */
-    bool time_trusted;      /* last sync younger than holdover limit */
+    clock_state_t time_state;   /* INVALID / TRUSTED / RTC_HOLD (clock_health.h) */
+    bool time_trusted;      /* time_state == CLOCK_TRUSTED */
+    bool time_valid;        /* time_state != CLOCK_INVALID: display and events run */
+    uint32_t rejected;      /* SNTP results outside the plausible build window */
     bool fresh;             /* current source synced recently, network up */
     int64_t unix_sec;       /* current system time at snapshot */
     int64_t unix_ms;        /* same snapshot as trust state, for rendering */
@@ -41,6 +46,9 @@ void sntp_mgr_start(void);
 /* Import RTC time whose last-sync age was already checked against the 24 h
  * policy. Does not count as an SNTP sync or make the current source fresh. */
 bool sntp_mgr_seed_rtc(uint32_t age_s);
+/* Import a valid RTC whose checkpoint is missing or older than 24 h: the
+ * clock runs as RTC_HOLD while rtc_mgr's cross-check passes. */
+void sntp_mgr_seed_rtc_hold(void);
 
 /* Called from the Wi-Fi event loop after GOT_IP: select the current priority
  * source. Disconnect stops SNTP and clears

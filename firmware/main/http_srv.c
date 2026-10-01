@@ -99,11 +99,14 @@ static esp_err_t handler_status(httpd_req_t *req)
                   wstate, w.mode == WIFI_MGR_MODE_AUTO ? "auto" : w.mode == WIFI_MGR_MODE_MANUAL ? "manual" : "off",
                   w.known, w.ssid, w.ip, w.rssi_dbm);
     n += snprintf(body + n, sizeof body - (size_t)n,
-                  "\"sntp\":{\"started\":%s,\"synced\":%s,\"trusted\":%s,"
+                  "\"sntp\":{\"started\":%s,\"synced\":%s,\"time_state\":\"%s\",\"trusted\":%s,"
+                  "\"valid\":%s,\"rejected\":%lu,"
                   "\"fresh\":%s,\"rtc_seeded\":%s,\"age_s\":%lu,\"source\":\"%s\",\"unix\":%lld},",
                   s.started ? "true" : "false",
                   s.synced ? "true" : "false",
+                  clock_state_name(s.time_state),
                   s.time_trusted ? "true" : "false",
+                  s.time_valid ? "true" : "false", (unsigned long)s.rejected,
                   s.fresh ? "true" : "false",
                   s.rtc_seeded ? "true" : "false",
                   (unsigned long)s.ntp_age_s,
@@ -132,7 +135,7 @@ static esp_err_t handler_status(httpd_req_t *req)
         n += snprintf(body + n, sizeof body - (size_t)n,
                       "\"updated_unix\":%lld,\"expires_unix\":%lld,\"expired\":%s},",
                       (long long)leap.updated_unix_s, (long long)leap.expires_unix_s,
-                      !s.time_trusted ? "null" : s.unix_sec >= leap.expires_unix_s ? "true" : "false");
+                      !s.time_valid ? "null" : s.unix_sec >= leap.expires_unix_s ? "true" : "false");
     else
         n += snprintf(body + n, sizeof body - (size_t)n,
                       "\"updated_unix\":null,\"expires_unix\":null,\"expired\":null},");

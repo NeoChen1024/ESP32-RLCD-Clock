@@ -38,9 +38,10 @@ static bool parse_scale(const char *text, int *scale)
     return true;
 }
 
-static bool sync_is_trusted(sync_state_t sync)
+static bool sync_is_valid(sync_state_t sync)
 {
-    return sync == SYNC_NTP_OK || sync == SYNC_RTC_HOLD || sync == SYNC_WIFI_LOST;
+    return sync == SYNC_NTP_OK || sync == SYNC_HOLDOVER || sync == SYNC_WIFI_LOST ||
+           sync == SYNC_RTC_HOLD;
 }
 
 static sync_state_t next_sync_state(sync_state_t sync)
@@ -48,7 +49,8 @@ static sync_state_t next_sync_state(sync_state_t sync)
     switch (sync) {
     case SYNC_BOOT_UNS: return SYNC_SYNCING;
     case SYNC_SYNCING:  return SYNC_NTP_OK;
-    case SYNC_NTP_OK:   return SYNC_RTC_HOLD;
+    case SYNC_NTP_OK:   return SYNC_HOLDOVER;
+    case SYNC_HOLDOVER: return SYNC_RTC_HOLD;
     case SYNC_RTC_HOLD: return SYNC_TIME_UNSAFE;
     case SYNC_WIFI_LOST:
     case SYNC_TIME_UNSAFE:
@@ -60,7 +62,7 @@ static sync_state_t next_sync_state(sync_state_t sync)
 static void apply_sim_controls(clock_model_t *model, const sim_controls_t *controls)
 {
     model->sync = controls->wifi_lost ? SYNC_WIFI_LOST : controls->sync;
-    model->time_trusted = sync_is_trusted(controls->sync);
+    model->time_valid = sync_is_valid(controls->sync);
     model->wifi_rssi_dbm = controls->wifi_lost ? -100 : -57;
     model->batt_v = controls->low_battery ? 3.20f : 3.91f;
 }

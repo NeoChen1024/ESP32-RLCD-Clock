@@ -4,6 +4,15 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Lower bound of plausible wall time (common/clock_health). Reproducible
+# builds can pin it with SOURCE_DATE_EPOCH.
+if(DEFINED ENV{SOURCE_DATE_EPOCH})
+  set(RLCD_BUILD_EPOCH $ENV{SOURCE_DATE_EPOCH})
+else()
+  string(TIMESTAMP RLCD_BUILD_EPOCH "%s" UTC)
+endif()
+add_compile_definitions(RLCD_BUILD_EPOCH=${RLCD_BUILD_EPOCH})
+
 # ---- SDL3 (host display backend) ----
 find_package(SDL3 CONFIG REQUIRED)
 

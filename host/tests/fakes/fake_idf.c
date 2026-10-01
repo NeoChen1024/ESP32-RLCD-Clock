@@ -1,6 +1,7 @@
 #include "fake_idf.h"
 #include <assert.h>
 #include <string.h>
+#include <time.h>
 static int64_t now_us;
 static ip_addr_t server;
 const char *fake_server_name;
@@ -9,7 +10,8 @@ unsigned fake_connect_calls, fake_start_calls, fake_scan_calls;
 wifi_config_t fake_wifi_config;
 static wifi_ap_record_t scan_records[8];
 static unsigned scan_count;
-static void (*sync_cb)(struct timeval *);
+bool fake_rtc_hold_ok;
+unsigned fake_clock_sets;
 static void (*policy_cb)(void *);
 static void (*timer_cb)(void *);
 static bool in_core;
@@ -27,7 +29,10 @@ char *ipaddr_ntoa_r(const ip_addr_t *ip, char *out, int n) {
              (ip->addr >> 8) & 255, ip->addr & 255); return out;
 }
 void sntp_setoperatingmode(uint8_t mode) { assert(in_core); (void)mode; }
-void sntp_set_time_sync_notification_cb(void (*cb)(struct timeval *)) { assert(in_core); sync_cb = cb; }
+void sntp_set_sync_status(int status) { assert(in_core); (void)status; }
+int fake_settimeofday(const struct timeval *tv, const void *tz) { (void)tv; (void)tz; fake_clock_sets++; return 0; }
+bool rtc_mgr_hold_ok(void) { return fake_rtc_hold_ok; }
+void sntp_sync_time(struct timeval *tv);   /* sntp_mgr's override of the lwIP hook */
 void sntp_stop(void) { assert(in_core); fake_sntp_running = false; }
 void sntp_init(void) { assert(in_core); fake_sntp_running = true; }
 void sntp_setserver(uint8_t idx, const ip_addr_t *ip) {
@@ -40,7 +45,13 @@ err_t tcpip_callback_wait(tcpip_callback_fn cb, void *arg) {
 }
 void sys_timeout(uint32_t ms, void (*cb)(void *), void *arg) { assert(in_core); (void)ms; (void)arg; policy_cb = cb; }
 void fake_advance(int64_t us) { now_us += us; in_core = true; policy_cb(NULL); in_core = false; }
-void fake_sync(void) { assert(fake_sntp_running); struct timeval tv = {0}; in_core = true; sync_cb(&tv); in_core = false; }
+void fake_sync_at(int64_t unix_s)
+{
+    assert(fake_sntp_running);
+    struct timeval tv = {.tv_sec = (time_t)unix_s};
+    in_core = true; sntp_sync_time(&tv); in_core = false;
+}
+void fake_sync(void) { fake_sync_at(time(NULL)); }
 extern void __wrap_dhcp_set_ntp_servers(uint8_t, const ip4_addr_t *);
 void fake_dhcp(uint32_t ip) { ip4_addr_t addr = {ip}; in_core = true; __wrap_dhcp_set_ntp_servers(ip ? 1 : 0, &addr); in_core = false; }
 void esp_ip4addr_ntoa(const ip4_addr_t *ip, char *out, int n) { ipaddr_ntoa_r(ip, out, n); }

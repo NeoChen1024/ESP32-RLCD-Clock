@@ -1,5 +1,7 @@
 #include "rtc_mgr.h"
 #include "rtc_clock.h"
+#include "clock_health.h"
+#include "esp_timer.h"
 #include "sensors.h"
 #include "sntp_mgr.h"
 #include "esp_log.h"
@@ -28,6 +30,7 @@ enum {
     RTC_WRITER_STACK_BYTES = 4096,
     RTC_WRITER_PRIORITY = 4,
     ANCHOR_MIN_INTERVAL_S = 6 * 60 * 60,
+    HOLD_CHECK_INTERVAL_MS = 60 * 1000,
 };
 /* Application-owned RAM marker, written only after a verified SNTP update.
  * It is not a PCF85063A-defined status value. */
@@ -39,6 +42,12 @@ static i2c_master_dev_handle_t s_rtc;
 static nvs_handle_t s_nvs;
 static bool s_nvs_open, s_boot_used;
 static QueueHandle_t s_sync_queue;
+/* Monotonic time when system clock and RTC last matched: an RTC boot seed
+ * or a verified RTC write after SNTP. Negative: never aligned this boot. */
+static int64_t s_aligned_us = -1;
+static volatile bool s_hold_ok;
+static int64_t s_hold_diff_s;
+static uint64_t s_hold_since_s;
 
 static bool read_registers(uint8_t start, uint8_t *out, size_t count)
 {
@@ -80,6 +89,9 @@ rtc_mgr_status_t rtc_mgr_status(void)
     st.anchor_valid = last_anchor(&st.last_sync_sec);
     st.eligible = st.calendar_valid && st.marker_valid && st.anchor_valid &&
                   rtc_clock_eligible(st.utc_sec, st.last_sync_sec);
+    st.hold_ok = s_hold_ok;
+    st.hold_diff_s = s_hold_diff_s;
+    st.hold_since_s = s_hold_since_s;
     return st;
 }
 
@@ -114,15 +126,41 @@ static void write_synced_time(void)
         if (err == ESP_OK) err = nvs_commit(s_nvs);
         if (err != ESP_OK) ESP_LOGW(TAG, "RTC last-sync checkpoint: %s", esp_err_to_name(err));
     }
+    s_aligned_us = esp_timer_get_time();
     ESP_LOGI(TAG, "RTC updated from SNTP at %lld UTC", (long long)verified);
 }
+
+/* RTC_HOLD cross-check: running, valid, marked, plausible and within the
+ * drift allowance of the system clock since the two were last aligned. */
+static void check_hold(void)
+{
+    rtc_mgr_status_t st = rtc_mgr_status();
+    struct timeval now;
+    bool ok = s_aligned_us >= 0 && st.present && !st.oscillator_stopped && st.calendar_valid &&
+              st.marker_valid && !gettimeofday(&now, NULL) &&
+              clock_wall_plausible(st.utc_sec, clock_build_epoch());
+    if (ok) {
+        uint64_t since = (uint64_t)((esp_timer_get_time() - s_aligned_us) / 1000000);
+        s_hold_diff_s = (int64_t)now.tv_sec - st.utc_sec;
+        s_hold_since_s = since;
+        ok = clock_rtc_agrees(now.tv_sec, st.utc_sec, since);
+    }
+    if (ok != s_hold_ok) ESP_LOGI(TAG, "RTC hold check %s (system-RTC %+lld s)",
+                                  ok ? "passing" : "FAILING", (long long)s_hold_diff_s);
+    s_hold_ok = ok;
+}
+
+bool rtc_mgr_hold_ok(void) { return s_hold_ok; }
 
 static void rtc_task(void *arg)
 {
     (void)arg;
     int64_t synced_epoch;
-    for (;;) if (xQueueReceive(s_sync_queue, &synced_epoch, portMAX_DELAY) == pdTRUE)
-        write_synced_time();
+    for (;;) {
+        if (xQueueReceive(s_sync_queue, &synced_epoch, pdMS_TO_TICKS(HOLD_CHECK_INTERVAL_MS)) == pdTRUE)
+            write_synced_time();
+        check_hold();
+    }
 }
 
 bool rtc_mgr_start(void)
@@ -139,16 +177,25 @@ bool rtc_mgr_start(void)
     s_nvs_open = err == ESP_OK;
     if (!s_nvs_open) ESP_LOGW(TAG, "NVS checkpoint unavailable: %s", esp_err_to_name(err));
 
+    /* A running, marked RTC inside the build window sets the clock. With a
+     * checkpoint under 24 h it is TRUSTED, otherwise RTC_HOLD. */
     rtc_mgr_status_t st = rtc_mgr_status();
-    if (st.eligible) {
-        uint32_t age = (uint32_t)(st.utc_sec - st.last_sync_sec);
-        struct timeval tv = {.tv_sec = (time_t)st.utc_sec};
-        if (settimeofday(&tv, NULL) == 0 && sntp_mgr_seed_rtc(age)) {
-            s_boot_used = true;
-            ESP_LOGI(TAG, "boot clock from RTC, last SNTP sync %u s ago", age);
-        } else ESP_LOGW(TAG, "RTC boot seed failed");
-    } else ESP_LOGI(TAG, "RTC not eligible for boot trust (present=%d, OS=%d, marker=%d, anchor=%d)",
-                    st.present, st.oscillator_stopped, st.marker_valid, st.anchor_valid);
+    bool usable = st.present && !st.oscillator_stopped && st.calendar_valid && st.marker_valid &&
+                  clock_wall_plausible(st.utc_sec, clock_build_epoch());
+    struct timeval tv = {.tv_sec = (time_t)st.utc_sec};
+    if (usable && settimeofday(&tv, NULL) == 0) {
+        s_boot_used = true;
+        s_aligned_us = esp_timer_get_time();
+        if (st.eligible && sntp_mgr_seed_rtc((uint32_t)(st.utc_sec - st.last_sync_sec))) {
+            ESP_LOGI(TAG, "boot clock from RTC, last SNTP sync %lld s ago (trusted)",
+                     (long long)(st.utc_sec - st.last_sync_sec));
+        } else {
+            sntp_mgr_seed_rtc_hold();
+            ESP_LOGI(TAG, "boot clock from RTC without a recent checkpoint (RTC hold)");
+        }
+        check_hold();
+    } else ESP_LOGI(TAG, "RTC not usable at boot (present=%d, OS=%d, calendar=%d, marker=%d)",
+                    st.present, st.oscillator_stopped, st.calendar_valid, st.marker_valid);
 
     s_sync_queue = xQueueCreate(1, sizeof(int64_t));
     if (!s_sync_queue || xTaskCreate(rtc_task, "rtc_writer", RTC_WRITER_STACK_BYTES,

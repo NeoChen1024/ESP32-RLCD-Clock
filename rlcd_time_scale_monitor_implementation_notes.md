@@ -22,7 +22,7 @@ verified `time/leap-seconds.list` supplies TAI−UTC.
 | Area | Next work | Status |
 | --- | --- | --- |
 | Leap table presentation | Decide how the face marks an expired or missing leap table, and adjust the layout around the unused band between the GPS row and telemetry. | Open |
-| Alarm | Define the alarm config schema and schedule policy, then add alarm triggering and button dismissal on top of the player (single/loop playback and HTTP control exist). | Deferred for later discussion |
+| Events | Implement the agreed [events design](docs/events.md): per-file `events/` rules, ringing and display-only events, upcoming list on the face, button dismissal. | Next |
 | RTC power and drift | Verify backup operation across a true power loss and measure RTC drift before considering calibration. The current test board has no RTC backup battery available. | Deferred until hardware is available |
 | Visual assets | Replace stock u8g2 fonts/text placeholders with a small shared font/icon asset set if the current face needs it. | Planned |
 | Validation and power | Add representative host↔target screenshot parity cases, injected sensor-failure coverage on hardware, low-battery presentation and power-behavior measurements. | Planned |
@@ -32,8 +32,9 @@ verified `time/leap-seconds.list` supplies TAI−UTC.
 - Keep one fixed u8g2 face shared by host and target; SDL3 presents the host
   framebuffer. LVGL and a separate SDL text renderer are outside scope.
 - Keep lwIP SNTP rather than implementing full RFC 5905 NTP or xleave. The
-  face updates at 1 Hz; RTC-backed and system-clock holdover are bounded by
-  the current 24-hour trust policy.
+  face updates at 1 Hz. Time is TRUSTED for 24 hours after a sync, then
+  RTC_HOLD while the RTC cross-check passes; only INVALID time masks the
+  face or stops events.
 - Use HTTP web page + file API for SD/internal-flash file management. FTP is
   not implemented. New config versions preserve older files; selection is
   based on descending filename order, with SD preferred over flash.

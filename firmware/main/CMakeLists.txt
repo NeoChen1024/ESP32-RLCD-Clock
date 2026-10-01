@@ -39,6 +39,15 @@ target_sources(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../../common/frame_export.c"
 )
 target_include_directories(${COMPONENT_LIB} PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../../common")
+# Lower bound of plausible wall time (common/clock_health), taken when CMake
+# configures; SOURCE_DATE_EPOCH pins it for reproducible builds. A stale
+# value only widens the window.
+if(DEFINED ENV{SOURCE_DATE_EPOCH})
+  set(RLCD_BUILD_EPOCH $ENV{SOURCE_DATE_EPOCH})
+else()
+  string(TIMESTAMP RLCD_BUILD_EPOCH "%s" UTC)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE RLCD_BUILD_EPOCH=${RLCD_BUILD_EPOCH})
 # dr_flac (FLAC decoding) is tracked as the contrib/dr_libs submodule.
 target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../contrib/dr_libs")
 

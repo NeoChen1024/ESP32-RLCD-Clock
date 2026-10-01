@@ -101,12 +101,14 @@ void time_model_now(clock_model_t *m)
     m->unix_ms = s.unix_ms;
     wifi_mgr_status_t w = wifi_mgr_status();
 
-    /* Trusted time comes from SNTP or a verified RTC boot checkpoint.
-     * The top-bar sync state is the single source of trust. */
-    if (s.started && s.time_trusted) {
-        m->time_trusted = true;
+    /* The time state (clock_health.h) decides validity; the top-bar label
+     * adds freshness and link detail. */
+    m->time_valid = s.started && s.time_valid;
+    if (m->time_valid && s.time_state == CLOCK_RTC_HOLD) {
+        m->sync = SYNC_RTC_HOLD;
+    } else if (m->time_valid) {
         if (w.state == WIFI_MGR_CONNECTED) {
-            m->sync = s.fresh ? SYNC_NTP_OK : SYNC_RTC_HOLD;
+            m->sync = s.fresh ? SYNC_NTP_OK : SYNC_HOLDOVER;
         } else {
             m->sync = SYNC_WIFI_LOST;
         }

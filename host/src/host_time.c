@@ -15,7 +15,7 @@ void time_model_now(clock_model_t *m)
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     m->unix_ms = (int64_t)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
-    m->time_trusted = true;
+    m->time_valid = true;
     m->sync         = SYNC_NTP_OK;
     m->ntp_age_s    = 0;
     m->wifi_rssi_dbm = -57;
