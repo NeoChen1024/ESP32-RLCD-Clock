@@ -2,6 +2,7 @@
 
 #include "cli.h"
 #include "config_mgr.h"
+#include "audio_mgr.h"
 #include "display.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -53,11 +54,15 @@ void app_main(void)
     /* Optional removable storage; a failed mount must not stop the clock. */
     storage_mgr_start();
     config_mgr_start();
+    /* Needs the shared I2C bus from sensors_start(). */
+    if (!audio_mgr_start()) {
+        ESP_LOGW(TAG, "audio unavailable");
+    }
 
     if (!http_srv_start()) {
         ESP_LOGE(TAG, "http_srv_start failed");
     }
 
-    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, rtc, tz, leap, config, sensor, sd, flash, http)");
+    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, rtc, tz, leap, config, audio, sensor, sd, flash, http)");
     cli_start();   /* blocks forever: REPL on USB-Serial/JTAG */
 }

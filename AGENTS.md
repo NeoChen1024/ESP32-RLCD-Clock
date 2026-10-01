@@ -54,8 +54,10 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the detected port
 has a 4 MiB factory app and 8 MiB wear-levelled FAT storage, with no OTA
 slots. Normal boot does not format storage. `flash init` may initialize an
 unmountable internal volume; `sd format` erases the SD card. Unmount SD before
-removing it. File access and mount changes share the storage mutex; preserve
-that ownership when adding audio playback or other file readers.
+removing it. File access and mount changes share the storage mutex. The audio
+reader holds it only per chunk. Long holders must yield it between chunks and
+check `storage_generation_locked()`. Call `audio_mgr_release_locked()` before
+unmounting, formatting, deleting or replacing files.
 
 ```sh
 cmake -S host -B host/build && cmake --build host/build -j

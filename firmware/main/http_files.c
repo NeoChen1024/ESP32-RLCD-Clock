@@ -5,6 +5,7 @@
 #include "leap_mgr.h"
 #include "model.h"
 #include "wifi_secrets.h"
+#include "audio_mgr.h"
 #include "cJSON.h"
 #include <dirent.h>
 #include <errno.h>
@@ -83,6 +84,7 @@ static esp_err_t active_config(httpd_req_t *req)
     }
     cJSON_AddStringToObject(j, "tz", active.tz.text);
     cJSON_AddStringToObject(j, "ntp_server", active.ntp_server);
+    cJSON_AddNumberToObject(j, "audio_volume", active.audio_volume);
     wifi_secrets_info_t secrets;
     wifi_secrets_current_locked(&secrets);
     cJSON *wifi = cJSON_AddObjectToObject(j, "wifi_secrets");
@@ -176,6 +178,21 @@ static esp_err_t listing(httpd_req_t *req, const char *volume, const char *root,
     }
     return json_response(req, j, "200 OK");
 }
+/* Briefly release the storage mutex between transfer chunks so the audio
+ * reader (higher priority) can refill its buffer. Returns false if a mount,
+ * unmount or format happened meanwhile; open files must then be abandoned. */
+static bool yield_storage(void)
+{
+    uint32_t generation = storage_generation_locked();
+    storage_unlock();
+    while (!storage_lock(1000)) {}
+    return storage_generation_locked() == generation;
+}
+/* 120 s plus one second per 128 KiB, so a 64 MiB WAV gets about 10 min. */
+static int64_t transfer_budget_us(uint64_t bytes)
+{
+    return (120LL + (int64_t)(bytes / (128 * 1024))) * 1000000;
+}
 static esp_err_t download(httpd_req_t *req, const char *path, const char *relative)
 {
     FILE *f = fopen(path, "rb");
@@ -193,9 +210,10 @@ static esp_err_t download(httpd_req_t *req, const char *path, const char *relati
     char buffer[4096];
     esp_err_t result = ESP_OK;
     size_t n;
-    int64_t deadline = esp_timer_get_time() + 120LL * 1000000;
+    int64_t deadline = esp_timer_get_time() + transfer_budget_us((uint64_t)st.st_size);
     while ((n = fread(buffer, 1, sizeof buffer, f))) {
         if (esp_timer_get_time() >= deadline || httpd_resp_send_chunk(req, buffer, n) != ESP_OK) { result = ESP_FAIL; break; }
+        if (!yield_storage()) { result = ESP_FAIL; break; }
     }
     if (ferror(f)) result = ESP_FAIL;
     if (fclose(f)) result = ESP_FAIL;
@@ -206,7 +224,7 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
 {
     if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding")) return error(req, "400 Bad Request", "use a Content-Length upload");
     if (!req->content_len || req->content_len > storage_file_limit(relative))
-        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV limit 16 MiB; empty files rejected");
+        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV limit 64 MiB; empty files rejected");
     uint64_t total, available;
     if (!storage_space_locked(volume, &total, &available)) return error(req, "503 Service Unavailable", "cannot query storage");
     if (available < req->content_len + 65536ULL) return error(req, "507 Insufficient Storage", "need room for complete temporary upload and metadata");
@@ -223,13 +241,18 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
     size_t remaining = req->content_len;
     bool ok = true;
     const char *fail_status = "500 Internal Server Error", *fail_text = "write failed";
-    int64_t deadline = esp_timer_get_time() + 120LL * 1000000;
+    int64_t deadline = esp_timer_get_time() + transfer_budget_us(req->content_len);
     while (remaining && ok) {
         if (esp_timer_get_time() >= deadline) { ok = false; fail_status = "408 Request Timeout"; fail_text = "upload deadline exceeded"; break; }
         int n = httpd_req_recv(req, buffer, remaining < sizeof buffer ? remaining : sizeof buffer);
         if (n <= 0) { ok = false; fail_status = "408 Request Timeout"; fail_text = "upload interrupted"; break; }
         ok = write(fd, buffer, n) == n;
         remaining -= n;
+        if (ok && !yield_storage()) {
+            /* The volume changed under us: the staged upload is gone or stale. */
+            close(fd);
+            return error(req, "503 Service Unavailable", "storage changed during upload; retry");
+        }
     }
     if (ok) ok = fsync(fd) == 0;
     if (close(fd)) ok = false;
@@ -238,7 +261,8 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
         snprintf(staged, sizeof staged, "%s/.rlcd-txn/upload", root);
         if (!config_mgr_file_valid(staged)) {
             ok = false; fail_status = "422 Unprocessable Content";
-            fail_text = "invalid config: tz must be a POSIX TZ rule, tz_offset_minutes -840..840, ntp_server a hostname or omitted";
+            fail_text = "invalid config: tz must be a POSIX TZ rule, tz_offset_minutes -840..840, "
+                        "audio_volume 0..100, ntp_server a hostname or omitted";
         }
     }
     if (ok && !strncmp(relative, "secrets/", 8)) {
@@ -250,13 +274,16 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
                         "password omitted, 8-63 printable ASCII or 64 hex digits";
         }
     }
+    if (ok) audio_mgr_release_locked(volume, relative);   /* never replace a file being played */
     if (ok && storage_txn_commit(root)) {
         ok = false;
         if (errno == EINVAL) {
             fail_status = "422 Unprocessable Content";
             fail_text = !strncmp(relative, "time/", 5)
                 ? "expected leap-seconds.list with #$, #@ and a matching #h SHA-1 line"
-                : "expected a JSON object (depth <=16) or RIFF/WAVE file with matching length";
+                : !strncmp(relative, "sounds/", 7)
+                ? "expected a 16-bit PCM WAV (mono/stereo, 8-48 kHz)"
+                : "expected a JSON object (depth <=16)";
         }
         else fail_text = "file replacement failed";
     }
@@ -324,6 +351,7 @@ static esp_err_t perform(httpd_req_t *req)
     }
     if (req->method == HTTP_PUT) return upload(req, volume, root, relative);
     if (req->method == HTTP_DELETE) {
+        audio_mgr_release_locked(volume, relative);
         if (unlink(path)) return error(req, errno == ENOENT ? "404 Not Found" : "500 Internal Server Error", "delete failed");
         if (!strncmp(relative, "config/", 7)) config_mgr_reload_locked();
         if (!strncmp(relative, "time/", 5)) leap_mgr_reload_locked();

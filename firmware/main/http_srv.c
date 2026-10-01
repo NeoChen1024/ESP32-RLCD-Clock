@@ -10,6 +10,7 @@
 #include "snapshot.h"
 #include "display.h"
 #include "model.h"
+#include "audio_mgr.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "http_srv";
@@ -83,7 +84,7 @@ static esp_err_t handler_snapshot_bmp(httpd_req_t *req)
 
 static esp_err_t handler_status(httpd_req_t *req)
 {
-    char body[1024];
+    char body[1536];
     int n = 0;
 
     wifi_mgr_status_t w = wifi_mgr_status();
@@ -135,6 +136,18 @@ static esp_err_t handler_status(httpd_req_t *req)
     else
         n += snprintf(body + n, sizeof body - (size_t)n,
                       "\"updated_unix\":null,\"expires_unix\":null,\"expired\":null},");
+    /* Managed paths are restricted to JSON-safe ASCII. */
+    audio_status_t a;
+    audio_mgr_status(&a);
+    n += snprintf(body + n, sizeof body - (size_t)n,
+                  "\"audio\":{\"available\":%s,\"state\":\"%s\",\"file\":\"%s%s%s\","
+                  "\"position_ms\":%lu,\"duration_ms\":%lu,\"volume\":%d,\"volume_source\":\"%s\","
+                  "\"underruns\":%lu,\"error\":\"%s\"},",
+                  a.available ? "true" : "false", a.state == AUDIO_PLAYING ? "playing" : "idle",
+                  a.state == AUDIO_PLAYING ? a.volume_name : "", a.state == AUDIO_PLAYING ? "/" : "",
+                  a.state == AUDIO_PLAYING ? a.relative : "", (unsigned long)a.position_ms,
+                  (unsigned long)a.duration_ms, a.volume, a.volume_override ? "cli" : "config",
+                  (unsigned long)a.underruns, a.last_error);
     n += snprintf(body + n, sizeof body - (size_t)n, "\"display_frames\":%lu}",
                   (unsigned long)display_frame_count());
 

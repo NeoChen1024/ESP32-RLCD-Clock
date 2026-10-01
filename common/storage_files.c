@@ -1,5 +1,6 @@
 #include "storage_files.h"
 #include "leap_table.h"
+#include "wav_format.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -173,11 +174,9 @@ bool storage_validate_file(const char *relative, const char *path)
     }
     bool ok = false;
     if (!strncmp(relative, "sounds/", 7)) {
-        unsigned char h[12];
-        if (fread(h, 1, sizeof h, f) == sizeof h) {
-            uint32_t size = (uint32_t)h[4] | (uint32_t)h[5] << 8 | (uint32_t)h[6] << 16 | (uint32_t)h[7] << 24;
-            ok = !memcmp(h, "RIFF", 4) && !memcmp(h + 8, "WAVE", 4) && (uint64_t)size + 8 == (uint64_t)st.st_size;
-        }
+        /* Only files the player can play are accepted. */
+        wav_info_t info;
+        ok = wav_parse(f, (uint64_t)st.st_size, &info) == WAV_OK;
     } else {
         size_t n = (size_t)st.st_size;
         char *buf = malloc(n + 1);

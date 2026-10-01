@@ -1,5 +1,6 @@
 #include "config_mgr.h"
 #include "leap_mgr.h"
+#include "audio_mgr.h"
 #include "wifi_secrets.h"
 #include "model.h"
 #include "sntp_mgr.h"
@@ -42,6 +43,13 @@ static bool parse_config(const char *path, config_selection_t *parsed)
     cJSON *rule = cJSON_GetObjectItemCaseSensitive(json, "tz");
     if (rule && (!cJSON_IsString(rule) || !rule->valuestring ||
                  !tz_rule_parse(rule->valuestring, &parsed->tz))) { cJSON_Delete(json); return false; }
+    parsed->audio_volume = AUDIO_DEFAULT_VOLUME;
+    cJSON *volume = cJSON_GetObjectItemCaseSensitive(json, "audio_volume");
+    if (volume) {
+        if (!cJSON_IsNumber(volume) || volume->valuedouble < 0 || volume->valuedouble > 100 ||
+            volume->valuedouble != (int)volume->valuedouble) { cJSON_Delete(json); return false; }
+        parsed->audio_volume = (int)volume->valuedouble;
+    }
     cJSON *server = cJSON_GetObjectItemCaseSensitive(json, "ntp_server");
     if (server && !cJSON_IsNull(server)) {
         if (!cJSON_IsString(server) || !server->valuestring) { cJSON_Delete(json); return false; }
@@ -70,7 +78,7 @@ static bool candidate(const char *path, void *context)
 bool config_mgr_reload_locked(void)
 {
     const char *volumes[] = {"sd", "flash"};
-    config_selection_t next = {0};
+    config_selection_t next = {.audio_volume = AUDIO_DEFAULT_VOLUME};
     tz_rule_fixed(480, &next.tz);
     for (unsigned i = 0; i < 2; ++i) {
         const char *volume = volumes[i];
@@ -87,6 +95,7 @@ bool config_mgr_reload_locked(void)
         break;
     }
     model_tz_set_config(&next.tz);
+    audio_mgr_set_config_volume(next.audio_volume);
     sntp_mgr_set_config_server(next.ntp_server[0] ? next.ntp_server : NULL);
     s_selected = next;
     if (next.found) ESP_LOGI(TAG, "selected %s/%s (TZ %s, NTP %s)",

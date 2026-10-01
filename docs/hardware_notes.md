@@ -27,6 +27,9 @@ data flow and storage partitioning are covered in [architecture](architecture.md
 | SHTC3 / PCF85063A | 0x70 / 0x51 | 7-bit I²C addresses |
 | Battery voltage | GPIO4, ADC1 channel 3 | 3× divider; ADC 12 dB attenuation |
 | SDMMC CLK / CMD / D0 | 38 / 21 / 39 | Vendor `06_SD_Card` example, 1-bit bus at 20 MHz |
+| I²S MCLK / BCLK / WS / DOUT / DIN | 16 / 9 / 45 / 8 / 10 | Vendor `07_Audio_Test` `board_cfg.txt` (`S3_RLCD_4_2`) |
+| ES8311 DAC / ES7210 ADC | 0x18 / 0x40 | 7-bit, on the shared I²C bus; ES7210 (microphones) is unused |
+| Speaker PA enable | GPIO46, active high | Vendor configuration uses 6 dB PA gain |
 
 ## Panel orientation and polarity
 

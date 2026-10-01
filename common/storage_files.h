@@ -5,7 +5,7 @@
 
 #define STORAGE_REL_MAX 112
 #define STORAGE_JSON_MAX (16U * 1024U)
-#define STORAGE_WAV_MAX (16U * 1024U * 1024U)
+#define STORAGE_WAV_MAX (64U * 1024U * 1024U)
 #define STORAGE_PATH_MAX 192
 #define STORAGE_LEAP_FILE "time/leap-seconds.list"
 #define STORAGE_WIFI_SECRETS "secrets/wifi.json"

@@ -39,7 +39,7 @@ function busyState(value){
 }
 async function activeConfig(){
   const state=await(await api('/fs/active')).json();
-  $('active').textContent=state.found?'Selected on this device: '+labels[state.volume]+' /'+state.path+' · TZ '+state.tz+' · NTP '+(state.ntp_server||'DHCP/fallback'):'Selected on this device: none (TZ '+state.tz+', DHCP/fallback)';
+  $('active').textContent=state.found?'Selected on this device: '+labels[state.volume]+' /'+state.path+' · TZ '+state.tz+' · NTP '+(state.ntp_server||'DHCP/fallback')+' · Volume '+state.audio_volume:'Selected on this device: none (TZ '+state.tz+', DHCP/fallback)';
   const wifi=state.wifi_secrets;
   $('active').textContent+=' · Wi-Fi '+(wifi.volume?wifi.networks+' known network'+(wifi.networks===1?'':'s')+' from '+labels[wifi.volume]:'no secrets/wifi.json');
   $('active').textContent+=' · Leap table '+(state.leap.volume==='builtin'?'built-in':labels[state.leap.volume]+', expires '+new Date(state.leap.expires_unix*1000).toISOString().slice(0,10));

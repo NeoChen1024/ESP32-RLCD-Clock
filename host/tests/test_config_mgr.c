@@ -1,6 +1,7 @@
 #include "config_mgr.h"
 #include "leap_mgr.h"
 #include "wifi_secrets.h"
+#include "audio_mgr.h"
 #include "model.h"
 #include <assert.h>
 #include <stdbool.h>
@@ -22,6 +23,8 @@ void storage_unlock(void) {}
 void model_tz_set_config(const tz_rule_t *rule) { snprintf(effective_tz,sizeof effective_tz,"%s",rule?rule->text:MODEL_TZ_DEFAULT); }
 bool leap_mgr_reload_locked(void) { ++leap_reloads; return false; }
 bool wifi_secrets_reload_locked(void) { return false; }
+static int effective_volume = -1;
+void audio_mgr_set_config_volume(int volume) { effective_volume = volume; }
 static void collect(const char *relative, void *context) { strcat(context, relative); strcat(context, ";"); }
 void sntp_mgr_set_config_server(const char *server) { snprintf(effective_ntp,sizeof effective_ntp,"%s",server?server:""); }
 static void put(const char *root, const char *name, const char *body)
@@ -48,6 +51,7 @@ int main(void)
     put(sd,"20260923T100000000Z.json","{\"tz_offset_minutes\":\"bad\"}");
     config_mgr_start();
     selection("sd","config/20260923T080000000Z.json","<+01>-1","");
+    assert(effective_volume == AUDIO_DEFAULT_VOLUME);
     assert(leap_reloads==1);
     put(sd,"20260923T110000000Z.json","{\"ntp_server\":\"pool.ntp.org\",\"tz_offset_minutes\":-300}");
     assert(config_mgr_reload());
@@ -56,12 +60,13 @@ int main(void)
     assert(config_mgr_reload());
     selection("sd","config/20260923T110000000Z.json","<-05>5","pool.ntp.org");
     /* "tz" is a POSIX rule and wins over the legacy offset; both must be valid. */
-    put(sd,"20260923T130000000Z.json","{\"tz\":\"CET-1CEST,M3.5.0,M10.5.0/3\",\"tz_offset_minutes\":60}");
+    put(sd,"20260923T130000000Z.json","{\"tz\":\"CET-1CEST,M3.5.0,M10.5.0/3\",\"tz_offset_minutes\":60,\"audio_volume\":35}");
     assert(config_mgr_reload());
     selection("sd","config/20260923T130000000Z.json","CET-1CEST,M3.5.0,M10.5.0/3","");
+    assert(effective_volume == 35);
     put(sd,"20260923T140000000Z.json","{\"tz\":\"CST-8\",\"tz_offset_minutes\":9999}");
     put(sd,"20260923T150000000Z.json","{\"tz\":\"+08:00\"}");
-    put(sd,"20260923T160000000Z.json","{\"tz\":480}");
+    put(sd,"20260923T160000000Z.json","{\"tz\":480,\"audio_volume\":101}");
     assert(config_mgr_reload());
     selection("sd","config/20260923T130000000Z.json","CET-1CEST,M3.5.0,M10.5.0/3","");
 

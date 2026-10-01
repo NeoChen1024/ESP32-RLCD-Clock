@@ -18,6 +18,10 @@ const char *storage_root(const char *volume);
 bool storage_lock(unsigned timeout_ms);
 void storage_unlock(void);
 bool storage_mounted_locked(const char *volume);
+/* Increments on every mount, unmount or format of either volume. A holder
+ * that releases the mutex mid-operation (long HTTP transfers yield to the
+ * audio reader) must abandon open files if this changed meanwhile. */
+uint32_t storage_generation_locked(void);
 bool storage_space_locked(const char *volume, uint64_t *total, uint64_t *free_bytes);
 int storage_flash_command(int argc, char **argv, FILE *out);
 #endif

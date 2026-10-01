@@ -10,6 +10,7 @@ typedef struct {
     char path[STORAGE_REL_MAX];
     tz_rule_t tz;   /* "tz" POSIX rule, else legacy tz_offset_minutes, else UTC+8 */
     char ntp_server[64];
+    int audio_volume;   /* 0..100, AUDIO_DEFAULT_VOLUME when absent */
 } config_selection_t;
 
 /* Semantic validation of supported fields in a JSON config object.

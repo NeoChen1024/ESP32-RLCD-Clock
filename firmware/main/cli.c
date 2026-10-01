@@ -13,6 +13,7 @@
 #include "linenoise/linenoise.h"
 #include "model.h"
 #include "config_mgr.h"
+#include "audio_mgr.h"
 #include "leap_mgr.h"
 #include "wifi_secrets.h"
 #include "rtc_mgr.h"
@@ -268,6 +269,53 @@ static int cmd_leap(int argc, char **argv)
     return 0;
 }
 
+/* ---- audio play [sd|flash] <file> | stop | volume [0-100] | status ---- */
+static int cmd_audio(int argc, char **argv)
+{
+    const char *op = argc > 1 ? argv[1] : "status";
+    if (!strcmp(op, "play") && (argc == 3 || argc == 4)) {
+        const char *volume = argc == 4 ? argv[2] : "sd";
+        const char *name = argv[argc - 1];
+        char relative[STORAGE_REL_MAX];
+        /* Accept a bare file name or the managed sounds/ path. */
+        snprintf(relative, sizeof relative, "%s%s", strncmp(name, "sounds/", 7) ? "sounds/" : "", name);
+        if (!audio_mgr_play(volume, relative)) { printf("cannot play %s/%s\n", volume, relative); return 1; }
+        printf("queued %s/%s\n", volume, relative);
+        return 0;
+    }
+    if (!strcmp(op, "stop") && argc == 2) { audio_mgr_stop(); printf("stopped\n"); return 0; }
+    if (!strcmp(op, "volume") && argc <= 3) {
+        if (argc == 3 && !strcmp(argv[2], "reset")) audio_mgr_reset_volume();
+        else if (argc == 3) {
+            char *end;
+            long v = strtol(argv[2], &end, 10);
+            if (!*argv[2] || *end || v < 0 || v > 100) { printf("volume is 0..100\n"); return 1; }
+            audio_mgr_set_volume((int)v);
+        }
+        audio_status_t st;
+        audio_mgr_status(&st);
+        printf("volume: %d (%s)\n", st.volume, st.volume_override ? "CLI override" : "selected config");
+        return 0;
+    }
+    if (!strcmp(op, "status") && argc <= 2) {
+        audio_status_t st;
+        audio_mgr_status(&st);
+        if (!st.available) { printf("audio: unavailable (codec init failed)\n"); return 1; }
+        if (st.state == AUDIO_PLAYING)
+            printf("playing: %s/%s\nformat:  %lu Hz, %u ch, 16-bit\nposition: %lu.%03lu / %lu.%03lu s\n",
+                   st.volume_name, st.relative, (unsigned long)st.sample_rate, st.channels,
+                   (unsigned long)st.position_ms / 1000, (unsigned long)st.position_ms % 1000,
+                   (unsigned long)st.duration_ms / 1000, (unsigned long)st.duration_ms % 1000);
+        else printf("idle\n");
+        printf("volume:  %d (%s)\nunderruns: %lu\n", st.volume,
+               st.volume_override ? "CLI override" : "selected config", (unsigned long)st.underruns);
+        if (st.last_error[0]) printf("last error: %s\n", st.last_error);
+        return 0;
+    }
+    printf("usage: audio play [sd|flash] <file> | stop | volume [0-100|reset] | status\n");
+    return 1;
+}
+
 /* ---- sensor read ---- */
 static int cmd_sensor(int argc, char **argv)
 {
@@ -343,8 +391,8 @@ static int cmd_config(int argc, char **argv)
     if (st.found) printf("file:     %s\n", st.path);
     tz_rule_t effective;
     model_tz_get(&effective, NULL);
-    printf("config TZ: %s\neffective TZ: %s\nconfig NTP: %s\n",
-           st.tz.text, effective.text, st.ntp_server[0] ? st.ntp_server : "DHCP/fallback");
+    printf("config TZ: %s\neffective TZ: %s\nconfig NTP: %s\nconfig audio volume: %d\n",
+           st.tz.text, effective.text, st.ntp_server[0] ? st.ntp_server : "DHCP/fallback", st.audio_volume);
     return 0;
 }
 
@@ -389,6 +437,9 @@ static void register_cmds(void)
         { .command = "leap", .help = "TAI-UTC table from time/leap-seconds.list: status | reload",
           .hint = "[status] | reload",
           .func = cmd_leap },
+        { .command = "audio", .help = "WAV playback: play [sd|flash] <sounds file> | stop | volume [0-100|reset] | status",
+          .hint = "play [sd|flash] \"<file>\" | stop | volume [0-100|reset] | status",
+          .func = cmd_audio },
         { .command = "sensor", .help = "read SHTC3 temp/humidity and battery voltage",
           .func = cmd_sensor },
         { .command = "config", .help = "selected version: status | reload | cleanup [sd|flash] [confirm]",

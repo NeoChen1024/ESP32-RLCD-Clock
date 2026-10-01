@@ -84,7 +84,9 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   `wifi disconnect` (auto connection paused until `wifi reset`),
   `ntp status | ntp server <host> | ntp reset`,
   `tz [<POSIX rule>|±HH:MM|minutes|reset]`, `leap status | reload`,
-  `config status | reload | cleanup [sd|flash] [confirm]`, `rtc status`, `sensor`, `sd`,
+  `config status | reload | cleanup [sd|flash] [confirm]`,
+  `audio play [sd|flash] "<file>" | stop | volume [0-100|reset] | status`,
+  `rtc status`, `sensor`, `sd`,
   `flash status | mount | init`, `http status`. `linenoise`
   runs in dumb mode for the USB VFS.
 - **Sensors**: SHTC3 temperature/humidity (I2C, CRC-8 checked) + battery
@@ -137,7 +139,7 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
 - **Firmware**: working — full UI ported to the panel and verified on
   hardware (time/sensors/telemetry all live), Wi-Fi + SNTP + HTTP +
   CLI bring-up complete, 1 Hz second-aligned refresh.
-- **Not yet**: alarm scheduling and audio playback (including FLAC),
+- **Not yet**: alarm scheduling, FLAC playback,
   leap-table status on the face, RTC drift calibration, custom icon fonts,
   low-battery visual polish —
   see [remaining work](rlcd_time_scale_monitor_implementation_notes.md#remaining-work).
@@ -163,8 +165,8 @@ curl -X DELETE http://<device>/fs/sd/sounds/alarm.wav
 ```
 
 Managed files are `config/<ASCII name>.json` (JSON objects, max 16 KiB,
-max nesting 16), `sounds/<ASCII name>.wav` (RIFF/WAVE container with
-matching length, max 16 MiB and available space permitting) and
+max nesting 16), `sounds/<ASCII name>.wav` (16-bit PCM, mono/stereo, 8–48 kHz,
+max 64 MiB and available space permitting) and
 `time/leap-seconds.list` (IERS format with a matching SHA-1 line, max 16 KiB;
 replaced in place) and `secrets/wifi.json` (known networks; replaced in place,
 never downloadable). Config versions
@@ -173,12 +175,13 @@ none is usable, the first valid internal-flash version wins; otherwise the
 defaults apply. SD takes priority even when a Flash filename sorts later.
 Supported keys are `tz` (POSIX TZ rule; offsets west of UTC as in POSIX),
 the legacy `tz_offset_minutes` (integer -840..840 east of UTC, used when `tz`
-is absent) and optional `ntp_server` (hostname or IPv4 address). See
+is absent), optional `ntp_server` (hostname or IPv4 address) and
+`audio_volume` (0–100, default 80). See
 [architecture](docs/architecture.md#storage-and-configuration) for the rule
 limits. For example:
 
 ```json
-{"tz": "CST-8", "ntp_server": "pool.ntp.org"}
+{"tz": "CST-8", "ntp_server": "pool.ntp.org", "audio_volume": 80}
 ```
 
 Start from the repository examples: copy `config.json.example` to
@@ -192,13 +195,14 @@ version and anything newer, and deletes only older versions; see
 CLI timezone and NTP overrides take priority until reset. Uploading a config
 requires a new filename
 (409 if already present); the web editor creates a timestamped version and
-retains older files. Invalid config returns 422. WAV playback and alarm
-configuration are still pending. Paths are case-sensitive at the API;
+retains older files. Invalid config or unplayable WAV returns 422. Alarm
+configuration is still pending. Paths are case-sensitive at the API;
 percent-encode spaces, and use no query parameters. Root, `config/`,
 `sounds/`, `time/` and `secrets/` listings return JSON; file listings show at most 256 entries.
 
-Uploads use Content-Length and a 120 s deadline; downloads also have a
-120 s deadline. A storage worker handles one transfer at a time, with one
+Uploads use Content-Length. Uploads and downloads have a deadline of 120 s
+plus 1 s per 128 KiB, and briefly release storage after each chunk so audio
+playback keeps reading. A storage worker handles one transfer at a time, with one
 additional request queued, keeping `/status` and snapshots responsive.
 Serial unmount/format waits for storage ownership. A private `.rlcd-txn`
 journal stages replacements and recovers interrupted rename sequences;

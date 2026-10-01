@@ -1,4 +1,5 @@
 {
   "tz": "CST-8",
-  "ntp_server": "pool.ntp.org"
+  "ntp_server": "pool.ntp.org",
+  "audio_volume": 80
 }

@@ -19,6 +19,7 @@
 #include "wear_levelling.h"
 #include "storage_files.h"
 #include "config_mgr.h"
+#include "audio_mgr.h"
 
 static const char *TAG = "storage";
 static SemaphoreHandle_t s_lock;
@@ -26,6 +27,7 @@ static sdmmc_card_t *s_card;
 static esp_err_t s_mount_error = ESP_ERR_INVALID_STATE;
 static wl_handle_t s_flash = WL_INVALID_HANDLE;
 static esp_err_t s_flash_error = ESP_ERR_INVALID_STATE;
+static uint32_t s_generation;
 
 static bool mount_flash(bool initialize)
 {
@@ -40,6 +42,7 @@ static bool mount_flash(bool initialize)
         ESP_LOGW(TAG, "flash mount: %s; use `flash init` for the new data partition", esp_err_to_name(s_flash_error));
         return false;
     }
+    s_generation++;
     ESP_LOGI(TAG, "mounted /flash with wear levelling (4096-byte sectors)");
     return true;
 }
@@ -60,6 +63,7 @@ bool storage_mounted_locked(const char *volume)
     return !strcmp(volume, "sd") ? s_card != NULL :
            !strcmp(volume, "flash") && s_flash != WL_INVALID_HANDLE;
 }
+uint32_t storage_generation_locked(void) { return s_generation; }
 bool storage_space_locked(const char *volume, uint64_t *total, uint64_t *free_bytes)
 {
     const char *root = storage_root(volume);
@@ -89,6 +93,7 @@ static bool mount_card(bool allow_format)
         return false;
     }
     s_card = card;
+    s_generation++;
     ESP_LOGI(TAG, "mounted %s: %.5s, %llu MiB, 1-bit SDMMC", SDCARD_MOUNT_POINT,
              card->cid.name, (unsigned long long)card->csd.capacity * card->csd.sector_size / (1024 * 1024));
     return true;
@@ -243,11 +248,13 @@ int storage_mgr_command(int argc, char **argv, FILE *out)
     const char *op = argc == 1 ? "status" : argv[1];
     int result = 1;
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    if ((!strcmp(op, "format") || !strcmp(op, "unmount")) && argc == 2) audio_mgr_release_locked("sd", NULL);
     if (!strcmp(op, "format") && argc == 2) {
         /* Explicit destructive command; normal mounts always pass false. */
         fprintf(out, "Formatting SD FAT volume; existing files will be erased.\n");
         if (mount_card(true)) {
             esp_err_t err = esp_vfs_fat_sdcard_format(SDCARD_MOUNT_POINT, s_card);
+            s_generation++;
             fprintf(out, "SD format: %s\n", esp_err_to_name(err));
             if (err == ESP_OK) {
                 if (config_mgr_started()) config_mgr_reload_locked();
@@ -265,6 +272,7 @@ int storage_mgr_command(int argc, char **argv, FILE *out)
         esp_err_t err = s_card ? esp_vfs_fat_sdcard_unmount(SDCARD_MOUNT_POINT, s_card) : ESP_OK;
         if (err == ESP_OK) {
             s_card = NULL; result = 0;
+            s_generation++;
             if (config_mgr_started()) config_mgr_reload_locked();
         }
         fprintf(out, "unmount: %s\n", esp_err_to_name(err));
@@ -288,7 +296,7 @@ int storage_flash_command(int argc, char **argv, FILE *out)
     int result = 1;
     const char *op = argc > 1 ? argv[1] : "status";
     if (argc <= 2 && (!strcmp(op, "init") || !strcmp(op, "mount") || !strcmp(op, "status"))) {
-        if (!strcmp(op, "init")) mount_flash(true);
+        if (!strcmp(op, "init")) { audio_mgr_release_locked("flash", NULL); mount_flash(true); }
         else if (!strcmp(op, "mount")) mount_flash(false);
         if (s_flash != WL_INVALID_HANDLE) {
             if (storage_txn_recover("/flash")) fprintf(out, "transaction recovery failed\n");

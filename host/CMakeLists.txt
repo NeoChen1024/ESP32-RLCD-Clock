@@ -79,15 +79,21 @@ target_include_directories(test_tz_leap PRIVATE ../common)
 target_compile_options(test_tz_leap PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 add_test(NAME tz_leap COMMAND test_tz_leap)
 
+add_executable(test_wav_format tests/test_wav_format.c ../common/wav_format.c)
+target_include_directories(test_wav_format PRIVATE ../common)
+target_compile_options(test_wav_format PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME wav_format COMMAND test_wav_format)
+
 add_executable(test_storage_files tests/test_storage_files.c ../common/storage_files.c
-  ../common/leap_table.c ../common/sha1.c)
+  ../common/leap_table.c ../common/sha1.c ../common/wav_format.c)
 target_include_directories(test_storage_files PRIVATE ../common)
 target_link_libraries(test_storage_files PRIVATE PkgConfig::CJSON)
 target_compile_options(test_storage_files PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 add_test(NAME storage_files COMMAND test_storage_files)
 
 add_executable(test_config_mgr tests/test_config_mgr.c ../firmware/main/config_mgr.c
-  ../common/storage_files.c ../common/tz_rule.c ../common/leap_table.c ../common/sha1.c)
+  ../common/storage_files.c ../common/tz_rule.c ../common/leap_table.c ../common/sha1.c
+  ../common/wav_format.c)
 target_include_directories(test_config_mgr PRIVATE tests/fakes ../firmware/main ../common)
 target_link_libraries(test_config_mgr PRIVATE PkgConfig::CJSON)
 target_compile_options(test_config_mgr PRIVATE -UNDEBUG -Wall -Wextra -Werror)
@@ -95,7 +101,7 @@ add_test(NAME config_mgr COMMAND test_config_mgr)
 target_compile_definitions(test_config_mgr PRIVATE REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
 
 add_executable(test_wifi_secrets tests/test_wifi_secrets.c ../firmware/main/wifi_secrets.c
-  ../common/storage_files.c ../common/leap_table.c ../common/sha1.c)
+  ../common/storage_files.c ../common/leap_table.c ../common/sha1.c ../common/wav_format.c)
 target_include_directories(test_wifi_secrets PRIVATE tests/fakes ../firmware/main ../common)
 target_link_libraries(test_wifi_secrets PRIVATE PkgConfig::CJSON)
 target_compile_options(test_wifi_secrets PRIVATE -UNDEBUG -Wall -Wextra -Werror)

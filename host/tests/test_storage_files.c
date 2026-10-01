@@ -97,8 +97,15 @@ int main(void)
     write_file("config/20260923T020000000Z.json", "{\"unknown\":true}");
     assert(storage_config_select(root,valid_config,NULL,selected)==1 && !strcmp(selected,version));
     int fd=storage_txn_begin(root,"sounds/test.wav");assert(fd>=0);
-    const unsigned char wav[]={ 'R','I','F','F',4,0,0,0,'W','A','V','E' };
+    /* 16-bit stereo 44.1 kHz PCM with one frame of data. */
+    const unsigned char wav[]={ 'R','I','F','F',40,0,0,0,'W','A','V','E',
+        'f','m','t',' ',16,0,0,0, 1,0, 2,0, 0x44,0xac,0,0, 0x10,0xb1,2,0, 4,0, 16,0,
+        'd','a','t','a',4,0,0,0, 1,2,3,4 };
     assert(write(fd,wav,sizeof wav)==sizeof wav);assert(!fsync(fd));assert(!close(fd));assert(!storage_txn_commit(root));
+    fd=storage_txn_begin(root,"sounds/test.wav");assert(fd>=0);
+    assert(write(fd,wav,12)==12);assert(!fsync(fd));assert(!close(fd));
+    assert(storage_txn_commit(root)==-1 && errno==EINVAL); /* header only: not playable */
+    assert(!storage_txn_recover(root));
     path(p,"sounds/test.wav");assert(!unlink(p));path(p,"sounds");assert(!rmdir(p));
     /* The leap table replaces in place only when its integrity hash verifies. */
     const char leap[] = "#$\t100\n#@\t4000000000\n2272060800\t10\n2287785600\t11\n"

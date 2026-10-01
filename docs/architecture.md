@@ -89,6 +89,9 @@ requires a new filename and preserves older versions. The applied keys are:
 - `tz_offset_minutes`: the legacy integer offset east of UTC (−840..840),
   used only when `tz` is absent. If both keys are present, both must be valid.
 - `ntp_server`: optional hostname or IPv4 address.
+- `audio_volume`: integer 0–100 (default 80) used for playback unless the
+  RAM-only `audio volume` CLI override is set; `audio volume reset` returns
+  to it.
 
 Without a usable config the rule is `<+08>-8` (UTC+8). Unknown keys are
 ignored. CLI timezone and NTP overrides take priority until reset. The current file manager edits JSON by creating a new
@@ -124,6 +127,28 @@ table. An expired table keeps its last TAI−UTC value. `/status` and
 `leap status` judge expiry only against trusted time; the face does not yet
 mark an expired or missing table.
 
-WAV files can be uploaded and downloaded but are not played. FLAC files are
-not accepted. Alarm scheduling, buttons and sound playback are outside the
-current firmware behavior; see [remaining work](../rlcd_time_scale_monitor_implementation_notes.md).
+## Audio playback
+
+`sounds/*.wav` files must be 16-bit linear PCM (WAVE_FORMAT_PCM, or
+EXTENSIBLE with the PCM subformat), mono or stereo, at 8–48 kHz, and at most
+64 MiB. `common/wav_format.c` checks this both on upload and before
+playback. Playback uses ES8311 on I²S0 (TX only, Philips standard format,
+MCLK = 256 × fs) through `esp_codec_dev`. `esp_codec_dev` turns the speaker
+PA on at open and off at close, and reconfigures the I²S clock for each
+file's sample rate.
+
+The player has two tasks. The reader holds the storage mutex only for each
+8 KiB read and fills a 512 KiB PSRAM stream buffer (about 3 s of 44.1 kHz
+stereo). The higher-priority writer drains that buffer to the codec; an
+empty buffer counts as an underrun, and the auto-cleared DMA plays silence.
+Long HTTP transfers release the mutex after every 4 KiB chunk so the reader
+can refill. Each storage mount, unmount or format increments a generation
+counter, and a transfer that sees it change abandons its open file. Before
+unmounting or formatting a volume, or deleting or replacing a file, storage
+owners call `audio_mgr_release_locked()`. The reader closes that file, and
+the audio already buffered still plays. Volume 0 mutes. Volumes 1–100 map
+linearly to −40…0 dB, replacing the library's −50…0 dB curve, which made
+mid-range settings very quiet. `esp_codec_dev` then subtracts about 2.4 dB
+of PA-gain compensation (6 dB PA gain, 3.3 V DAC into a 5 V PA), so 100 sets
+the DAC to about −2.4 dB. FLAC decoding, alarm scheduling and buttons are not implemented; see
+[remaining work](../rlcd_time_scale_monitor_implementation_notes.md).

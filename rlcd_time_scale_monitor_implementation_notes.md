@@ -22,7 +22,8 @@ verified `time/leap-seconds.list` supplies TAI−UTC.
 | Area | Next work | Status |
 | --- | --- | --- |
 | Leap table presentation | Decide how the face marks an expired or missing leap table, and adjust the layout around the unused band between the GPS row and telemetry. | Open |
-| Alarm and audio | Define the alarm config schema and schedule policy; bring up ES8311/I²S playback from a managed WAV file, then add alarm triggering and button dismissal. FLAC can follow a working PCM/WAV path. | Deferred for later discussion |
+| FLAC playback | Add a FLAC source to the working WAV player; the survey favours dr_flac (public domain/MIT-0, callback reads, s16 output), with Espressif's esp_audio_codec as the closed-binary fallback. | Next |
+| Alarm | Define the alarm config schema and schedule policy, then add alarm triggering and button dismissal on top of the player. | Deferred for later discussion |
 | RTC power and drift | Verify backup operation across a true power loss and measure RTC drift before considering calibration. The current test board has no RTC backup battery available. | Deferred until hardware is available |
 | Visual assets | Replace stock u8g2 fonts/text placeholders with a small shared font/icon asset set if the current face needs it. | Planned |
 | Validation and power | Add representative host↔target screenshot parity cases, injected sensor-failure coverage on hardware, low-battery presentation and power-behavior measurements. | Planned |
