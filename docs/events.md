@@ -4,7 +4,7 @@ This is the agreed design for scheduled events. Events can ring an alarm,
 or only appear in the upcoming list on the face. They are **not implemented
 yet**; progress is tracked in the
 [implementation notes](../rlcd_time_scale_monitor_implementation_notes.md).
-Playback is already in place (see [architecture](architecture.md#audio-playback)).
+Playback is already in place (see [audio](audio.md)).
 
 ## Files
 
@@ -92,7 +92,7 @@ are out of scope for now.
 
 - **Time state:** Events run unless the time state is INVALID; RTC_HOLD
   time runs them normally (see
-  [architecture](architecture.md#time-acquisition-and-trust)).
+  [time](time.md#time-state)).
 - **Local time:** Matching uses local time from the active POSIX TZ rule.
 - **Clock steps:**
   - A forward step of up to 60 s fires the occurrences it skipped; a larger

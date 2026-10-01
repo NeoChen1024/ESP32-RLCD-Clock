@@ -4,14 +4,10 @@ A Waveshare ESP32-S3 RLCD 4.2 based **time-scale instrument** — a reflective
 monochrome 400×300 display showing local time, UTC, MJD(TAI), GPS week/TOW,
 ISO week date, sync state and telemetry, in a fixed-width instrument aesthetic.
 
-Primary time source is Wi-Fi SNTP. After a successful sync, the ESP32 system
-clock provides holdover. Time is TRUSTED within 24 hours of a sync. After
-that it is RTC_HOLD while the PCF85063A agrees with the system clock, and
-otherwise INVALID. Wall time outside [build time, build time + 10 years] is
-always INVALID. An RTC boot restores TRUSTED time with a checkpoint under
-24 hours, and RTC_HOLD otherwise.
-No GNSS or PPS. TAI−UTC comes from an uploaded IERS `leap-seconds.list` when
-one verifies, otherwise from a built-in current-era value.
+Time comes from Wi-Fi SNTP, with ESP32 system-clock holdover and the
+PCF85063A RTC. There is no GNSS or PPS. A three-state trust model
+(INVALID / TRUSTED / RTC_HOLD) decides what the face shows; see
+[docs/time.md](docs/time.md).
 
 ## Repository layout
 
@@ -30,7 +26,7 @@ firmware/                                            ESP-IDF v6.0.2 target firmw
   components/ u8g2 (submodule) + u8g2_st7305 SPI backend
 u8g2/                                                u8g2 submodule (drawing engine)
 contrib/dr_libs/                                     dr_libs submodule (dr_flac FLAC decoder)
-docs/                                                architecture, hardware notes and schematic
+docs/                                                architecture overview and subsystem contracts
 ```
 
 Fetch both submodules before building: `git submodule update --init`.
@@ -62,20 +58,9 @@ spec.
 
 ## Firmware (ESP32-S3 RLCD)
 
-ESP-IDF v6.0.2 firmware — Wi-Fi/SNTP/HTTP server + serial CLI. Known Wi-Fi
-networks come from a write-only `secrets/wifi.json`. Neither they nor CLI
-overrides are stored in NVS (`WIFI_STORAGE_RAM`). A small NVS record stores
-the last verified SNTP checkpoint for RTC trust, not user config.
-Versioned settings on SD or internal flash persist across reboot;
-without a usable config, TZ defaults to UTC+8 (`<+08>-8`).
-
-Flash layout is defined in `firmware/partitions.csv`: one 4 MiB factory app
-and an 8 MiB FAT data partition on the 16 MiB flash, with NVS/PHY retained.
-The internal filesystem mounts at `/flash` with 4096-byte-sector wear levelling;
-SD mounts at `/sdcard`. `flash init` explicitly initializes an unmountable
-internal filesystem; ordinary boot mounts never auto-format.
-
-Build/flash:
+ESP-IDF v6.0.2, a standalone `esp32s3` project in `firmware/`. The flash
+holds a 4 MiB factory app and an 8 MiB FAT partition, with no OTA slots
+([storage](docs/storage.md#volumes)).
 
 ```sh
 source /opt/esp-idf/export.sh
@@ -83,65 +68,74 @@ cd firmware
 idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
 ```
 
-- **Display**: the full single face on the ST7305 panel via the vendor
-  `u8g2_st7305` SPI backend, refreshed 1 Hz aligned to the wall-clock second
-  boundary (self-heals across SNTP steps).
-- **CLI** (USB-Serial/JTAG console): `wifi status | reconnect | reset`,
-  `wifi connect "<ssid>" [password]` (manual until `wifi reset`),
-  `wifi disconnect` (auto connection paused until `wifi reset`),
-  `ntp status | ntp server <host> | ntp reset`,
-  `tz [<POSIX rule>|±HH:MM|minutes|reset]`, `leap status | reload`,
-  `config status | reload | cleanup [sd|flash] [confirm]`,
-  `audio play [sd|flash] "<file>" [loop] | stop | volume [0-100|reset] | status`
-  (a loop stops after 10 minutes),
-  `rtc status`, `sensor`, `sd`,
-  `flash status | mount | init`, `http status`. `linenoise`
-  runs in dumb mode for the USB VFS.
-- **Sensors**: SHTC3 temperature/humidity (I2C, CRC-8 checked) + battery
-  voltage (ADC1 CH3, ×3 divider). Device RSSI is real
-  (`esp_wifi_sta_get_ap_info`); values flow into the model each frame.
-  One-off SHTC3 failures retain the last sample for up to 10 seconds; after
-  that, temperature/humidity show `n/a` until a new valid reading. Battery
-  ADC failure shows `n/a` immediately instead of a misleading 0 V.
-- **RTC holdover**: the PCF85063A on the shared I²C bus is updated after
-  each SNTP synchronization.
-  - At boot, a running, marked RTC inside the build window sets the clock:
-    TRUSTED if the NVS last-sync checkpoint is under 24 hours old,
-    otherwise RTC_HOLD.
-  - The RTC is cross-checked against the system clock every minute.
-  - `rtc status` shows the checks, and `ntp status` shows the time state
-    and any rejected SNTP results.
-  - Invalid RTC data leaves time fields masked until SNTP succeeds.
-- **SD card**: FAT on 1-bit SDMMC (CLK=38 CMD=21 D0=39, 20 MHz), mounted
-  at `/sdcard` without auto-formatting. CLI: `sd status`, `sd ls [dir]`,
-  `sd cat <file>` (4 KiB preview), `sd test` (temporary-file round trip),
-  `sd unmount` / `sd mount`, and destructive `sd format` (16 KiB clusters).
-  Paths are relative to `/sdcard`. Unmount before removing the card;
-  automatic hotplug is not implemented. Both storage volumes are managed at
-  `http://<device>/files` and through GET/PUT/DELETE under `/fs/flash/`
-  and `/fs/sd/` (versioned JSON configs, WAV sounds, the leap table and
-  write-only Wi-Fi secrets).
-- **HTTP server** (:80): English homepage `/`, English file manager `/files`,
-  status `/status`, active config `/fs/active`, playback control `/audio`
-  (see below), and `/snapshot.pbm` and
-  `/snapshot.bmp`. Snapshots encode via the shared `frame_export`, so
-  host↔target exports are byte-comparable.
-- **NTP**: manual `ntp server` CLI > selected config `ntp_server` (SD first,
-  then internal flash) > DHCP option 42 > pool.ntp.org, with a watchdog that reverts to the pool if
-  the DHCP-provided server cannot sync within 18 s, and retries DHCP every
-  5 minutes. Last-good trust survives resync; age uses monotonic time, with
-  2 h freshness and 24 h TRUSTED holdover before RTC_HOLD. Stays on the lwIP SNTP
-  client — full NTP/xleave is outside the agreed scope (see
-  [implementation notes](rlcd_time_scale_monitor_implementation_notes.md)).
+First-time setup on either volume, over HTTP or by copying files onto the
+SD card:
+
+- **Known Wi-Fi networks:** copy `wifi.json.example` to `secrets/wifi.json`
+  ([network](docs/network.md#known-networks)).
+- **Optional config:** copy `config.json.example` to
+  `config/<UTC timestamp>.json` for the time zone, NTP server and audio
+  volume ([storage](docs/storage.md#configuration-versions)).
+- **Optional leap table:** an IERS `leap-seconds.list` as
+  `time/leap-seconds.list` ([time](docs/time.md#time-scales)).
+
+Real `config.json`, `wifi.json`, `config/` and `secrets/` are git-ignored.
+Until Wi-Fi is configured, use `wifi connect` on the serial console.
+
+### Serial CLI (USB-Serial/JTAG)
+
+| Command | Purpose |
+| --- | --- |
+| `wifi status \| connect "<ssid>" [pw] \| disconnect \| reconnect \| reset` | [Wi-Fi modes](docs/network.md#wi-fi-modes) |
+| `ntp status \| server <host> \| reset \| resync` | [SNTP sources](docs/time.md#time-sources) and time state |
+| `rtc status` | [RTC checks](docs/time.md#rtc) |
+| `tz [<POSIX rule> \| ±HH:MM \| minutes \| reset]` | [Local time](docs/time.md#local-time) |
+| `leap [status] \| reload` | [Leap table](docs/time.md#time-scales) |
+| `config [status] \| reload \| cleanup [sd\|flash] [confirm]` | [Config versions](docs/storage.md#configuration-versions) |
+| `audio play [sd\|flash] "<file>" [loop] \| stop \| volume [0-100\|reset] \| status` | [Playback](docs/audio.md) |
+| `sd status \| mount \| unmount \| ls \| cat \| test \| format` | SD card (`format` erases it; unmount before removal) |
+| `flash status \| mount \| init` | Internal FAT |
+| `sensor`, `http` | Telemetry readout, HTTP endpoints |
+
+### HTTP (port 80)
+
+The homepage `/`, the file manager `/files`, `/status` and framebuffer
+snapshots are served directly. The file and audio APIs:
+
+```sh
+curl http://<device>/status
+curl -T config.json http://<device>/fs/flash/config/20260923T120000000Z.json
+curl -T wifi.json   http://<device>/fs/flash/secrets/wifi.json   # write-only
+curl -T alarm.flac  http://<device>/fs/sd/sounds/alarm.flac
+curl -T leap-seconds.list http://<device>/fs/sd/time/leap-seconds.list
+curl http://<device>/fs/sd/cleanup                               # preview
+curl -X POST http://<device>/fs/sd/cleanup                       # delete older versions
+curl -X POST -d '{"file":"alarm.flac","loop":true}' http://<device>/audio/play
+curl -X POST http://<device>/audio/stop
+curl -X POST -d '{"level":70}' http://<device>/audio/volume       # or {"reset":true}
+curl -X DELETE http://<device>/fs/sd/sounds/alarm.flac
+```
+
+Endpoints are listed in [network](docs/network.md#http-endpoints). File
+rules, limits and deadlines are in
+[storage](docs/storage.md#http-file-api), and the playback API in
+[audio](docs/audio.md#control). The API is unauthenticated; use it on a
+trusted LAN only.
 
 ## Project documentation
 
 - [Implementation notes](rlcd_time_scale_monitor_implementation_notes.md):
   active progress, remaining work and agreed design boundaries.
-- [Architecture](docs/architecture.md): current data flow, time trust,
-  rendering and storage contracts.
+- [Architecture](docs/architecture.md): overview of shared code, tasks,
+  locks and data flow, with links to the subsystem contracts:
+  - [time](docs/time.md)
+  - [storage](docs/storage.md)
+  - [audio](docs/audio.md)
+  - [network](docs/network.md)
+  - [events](docs/events.md)
 - [Hardware notes](docs/hardware_notes.md): board wiring, panel behavior
-  and RTC power boundary; [AGENTS.md](AGENTS.md) is the local bring-up runbook.
+  and RTC power boundary.
+- [AGENTS.md](AGENTS.md): the local bring-up runbook.
 
 ## Status
 
@@ -151,77 +145,7 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
 - **Firmware**: working — full UI ported to the panel and verified on
   hardware (time/sensors/telemetry all live), Wi-Fi + SNTP + HTTP +
   CLI bring-up complete, 1 Hz second-aligned refresh.
-- **Not yet**: alarm scheduling,
+- **Not yet**: scheduled events ([design](docs/events.md)),
   leap-table status on the face, RTC drift calibration, custom icon fonts,
   low-battery visual polish —
   see [remaining work](rlcd_time_scale_monitor_implementation_notes.md#remaining-work).
-
-## HTTP file management
-
-`GET /files` opens the responsive file manager (volume selection, directory
-listing, multi-file upload/drop, download, delete and versioned JSON editing).
-The homepage at `/` uses the same style. `GET /fs/` lists mounted volumes and
-free space; `GET /fs/active` reports the selected config, Wi-Fi secrets source
-and leap table. File API examples:
-
-```sh
-curl http://<device>/fs/flash/
-curl -T config.json http://<device>/fs/flash/config/20260923T120000000Z.json
-curl -T alarm.wav http://<device>/fs/sd/sounds/alarm.wav
-curl -T leap-seconds.list http://<device>/fs/sd/time/leap-seconds.list
-curl -T wifi.json http://<device>/fs/flash/secrets/wifi.json   # write-only
-curl http://<device>/fs/sd/cleanup                             # preview
-curl -X POST http://<device>/fs/sd/cleanup                     # delete older versions
-curl -X POST -d '{"file":"alarm.wav","loop":true}' http://<device>/audio/play
-curl -X POST http://<device>/audio/stop
-curl -X POST -d '{"level":70}' http://<device>/audio/volume     # or {"reset":true}
-curl http://<device>/audio                                      # playback status
-curl -o saved.json http://<device>/fs/flash/config/20260923T120000000Z.json
-curl -X DELETE http://<device>/fs/sd/sounds/alarm.wav
-```
-
-Managed files are `config/<ASCII name>.json` (JSON objects, max 16 KiB,
-max nesting 16), `sounds/<ASCII name>.wav` or `.flac` (WAV: 16-bit PCM; FLAC: native, any
-bit depth; both mono/stereo, 8–48 kHz, max 64 MiB and available space
-permitting) and
-`time/leap-seconds.list` (IERS format with a matching SHA-1 line, max 16 KiB;
-replaced in place) and `secrets/wifi.json` (known networks; replaced in place,
-never downloadable). Config versions
-are read in descending filename order: the first valid SD version wins; if
-none is usable, the first valid internal-flash version wins; otherwise the
-defaults apply. SD takes priority even when a Flash filename sorts later.
-Supported keys are `tz` (POSIX TZ rule; offsets west of UTC as in POSIX),
-the legacy `tz_offset_minutes` (integer -840..840 east of UTC, used when `tz`
-is absent), optional `ntp_server` (hostname or IPv4 address) and
-`audio_volume` (0–100, default 80). See
-[architecture](docs/architecture.md#storage-and-configuration) for the rule
-limits. For example:
-
-```json
-{"tz": "CST-8", "ntp_server": "pool.ntp.org", "audio_volume": 80}
-```
-
-Start from the repository examples: copy `config.json.example` to
-`config/<UTC timestamp>.json` and `wifi.json.example` to
-`secrets/wifi.json` on either volume, or upload them as shown above.
-`config.json`, `wifi.json`, `config/` and `secrets/` are git-ignored so real
-settings stay out of the repository. Cleanup keeps each volume's selected
-version and anything newer, and deletes only older versions; see
-[architecture](docs/architecture.md#storage-and-configuration).
-
-CLI timezone and NTP overrides take priority until reset. Uploading a config
-requires a new filename
-(409 if already present); the web editor creates a timestamped version and
-retains older files. Invalid config or an undecodable sound returns 422. Alarm
-configuration is still pending. Paths are case-sensitive at the API;
-percent-encode spaces, and use no query parameters. Root, `config/`,
-`sounds/`, `time/` and `secrets/` listings return JSON; file listings show at most 256 entries.
-
-Uploads use Content-Length. Uploads and downloads have a deadline of 120 s
-plus 1 s per 128 KiB, and briefly release storage after each chunk so audio
-playback keeps reading. A storage worker handles one transfer at a time, with one
-additional request queued, keeping `/status` and snapshots responsive.
-Serial unmount/format waits for storage ownership. A private `.rlcd-txn`
-journal stages replacements and recovers interrupted rename sequences;
-this is not a guarantee against FAT metadata damage on power loss. Do not
-modify that directory. No HTTP formatting endpoint is exposed.

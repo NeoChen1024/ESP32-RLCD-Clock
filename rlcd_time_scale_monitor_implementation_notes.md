@@ -2,7 +2,8 @@
 
 This is the active scope and progress tracker for the Waveshare ESP32-S3
 RLCD 4.2 time-scale instrument. The current product behavior and data flow
-are described in [architecture](docs/architecture.md); board facts and the
+are described in [architecture](docs/architecture.md) and the subsystem
+documents it links; board facts and the
 RTC power boundary live in [hardware notes](docs/hardware_notes.md). Use the
 [README](README.md) for build and usage instructions.
 

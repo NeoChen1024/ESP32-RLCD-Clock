@@ -4,7 +4,7 @@ This is the board and media reference for the Waveshare ESP32-S3 RLCD 4.2.
 The firmware design and current progress remain in
 [the implementation notes](../rlcd_time_scale_monitor_implementation_notes.md).
 See also the [local schematic](ESP32-S3-RLCD-4.2-schematic.pdf). Firmware
-data flow and storage partitioning are covered in [architecture](architecture.md).
+data flow is covered in [architecture](architecture.md) and storage partitioning in [storage](storage.md).
 
 ## Board and connections
 
@@ -52,7 +52,7 @@ power can keep the board running, but a full loss of RTC power can stop its
 oscillator. The PCF85063A oscillator-stop (OS) flag then invalidates a boot
 time read; the firmware does not treat an unverified date as trusted time.
 RTC-seeded boot works while RTC power is maintained (TRUSTED or RTC_HOLD,
-see [architecture](architecture.md#time-acquisition-and-trust)). Independent
+see [time](time.md#time-state)). Independent
 backup operation across a true power loss is **unverified** and deferred
 until a backup battery is available.
 

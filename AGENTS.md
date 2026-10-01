@@ -10,9 +10,13 @@ in English; discuss work with the user in their language. Give each topic one
 primary home:
 
 - `README.md` and `host/README.md`: supported build and usage instructions.
-- `docs/architecture.md`: current rendering, time-trust and storage contract.
-- `docs/hardware_notes.md`: board wiring, panel behavior and power boundary.
+- `docs/architecture.md`: overview (shared code, tasks, locks, data flow).
+- `docs/time.md`: time scales, local time, SNTP, time state and RTC.
+- `docs/storage.md`: volumes, managed files, selection, journal, file API.
+- `docs/audio.md`: sound formats, playback pipeline, loops, volume, control.
+- `docs/network.md`: Wi-Fi modes, known-network secrets, HTTP endpoints.
 - `docs/events.md`: agreed event/alarm scheduling design until implemented.
+- `docs/hardware_notes.md`: board wiring, panel behavior and power boundary.
 - `rlcd_time_scale_monitor_implementation_notes.md`: remaining work and
   explicitly agreed scope.
 - This file: local build/bring-up steps and invariants agents must preserve.
