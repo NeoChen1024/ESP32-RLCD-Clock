@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "audio_io.h"
 
 /*
  * RIFF/WAVE header parsing shared by upload validation, the player and host
@@ -26,6 +27,7 @@ typedef enum {
     WAV_UNSUPPORTED,        /* valid WAVE, but not a playable PCM format */
 } wav_result_t;
 
+wav_result_t wav_parse_io(const audio_io_t *io, wav_info_t *out);
 /* f is positioned anywhere; file_size is its length in bytes. */
 wav_result_t wav_parse(FILE *f, uint64_t file_size, wav_info_t *out);
 const char *wav_result_text(wav_result_t r);

@@ -224,7 +224,7 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
 {
     if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding")) return error(req, "400 Bad Request", "use a Content-Length upload");
     if (!req->content_len || req->content_len > storage_file_limit(relative))
-        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV limit 64 MiB; empty files rejected");
+        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV/FLAC limit 64 MiB; empty files rejected");
     uint64_t total, available;
     if (!storage_space_locked(volume, &total, &available)) return error(req, "503 Service Unavailable", "cannot query storage");
     if (available < req->content_len + 65536ULL) return error(req, "507 Insufficient Storage", "need room for complete temporary upload and metadata");
@@ -282,7 +282,7 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
             fail_text = !strncmp(relative, "time/", 5)
                 ? "expected leap-seconds.list with #$, #@ and a matching #h SHA-1 line"
                 : !strncmp(relative, "sounds/", 7)
-                ? "expected a 16-bit PCM WAV (mono/stereo, 8-48 kHz)"
+                ? "expected a decodable WAV (16-bit PCM) or FLAC, mono/stereo, 8-48 kHz"
                 : "expected a JSON object (depth <=16)";
         }
         else fail_text = "file replacement failed";

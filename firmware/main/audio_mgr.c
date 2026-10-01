@@ -1,8 +1,9 @@
 #include "audio_mgr.h"
 #include "sensors.h"
 #include "storage_mgr.h"
-#include "wav_format.h"
+#include "audio_source.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -138,33 +139,67 @@ static void stop_writer(void)
     xStreamBufferReset(s_stream);       /* writer is idle, so nothing is blocked on it */
 }
 
-static bool open_file(const cmd_t *c, wav_info_t *out)
+/* ---- storage-locked io for audio_source ---- */
+
+static bool s_io_locked;   /* the reader already holds the storage mutex */
+
+static void io_lock(void)
+{
+    if (!s_io_locked) while (!storage_lock(1000)) {}
+}
+static void io_unlock(void)
+{
+    if (!s_io_locked) storage_unlock();
+}
+static size_t io_read(void *ctx, void *buf, size_t n)
+{
+    (void)ctx;
+    io_lock();
+    size_t got = s_file ? fread(buf, 1, n, s_file) : 0;   /* 0 once released */
+    io_unlock();
+    return got;
+}
+static bool io_seek(void *ctx, uint64_t offset)
+{
+    (void)ctx;
+    io_lock();
+    bool ok = s_file && offset <= LONG_MAX && !fseek(s_file, (long)offset, SEEK_SET);
+    io_unlock();
+    return ok;
+}
+
+static audio_source_t s_src;
+
+static bool open_file(const cmd_t *c)
 {
     char path[STORAGE_PATH_MAX];
     snprintf(path, sizeof path, "%s/%s", storage_root(c->volume), c->relative);
     if (!storage_lock(5000)) { set_error("storage busy"); return false; }
+    s_io_locked = true;   /* header parsing runs under this hold */
     bool ok = false;
+    struct stat st;
     if (!storage_mounted_locked(c->volume)) set_error("volume is not mounted");
     else if (!(s_file = fopen(path, "rb"))) set_error("cannot open file");
+    else if (fstat(fileno(s_file), &st)) set_error("cannot stat file");
     else {
-        struct stat st;
-        wav_info_t info;
-        wav_result_t r = fstat(fileno(s_file), &st) ? WAV_NOT_RIFF
-                       : wav_parse(s_file, (uint64_t)st.st_size, &info);
-        if (r != WAV_OK) set_error(wav_result_text(r));
-        else if (fseek(s_file, (long)info.data_offset, SEEK_SET)) set_error("seek failed");
+        audio_io_t io = { .read = io_read, .seek = io_seek, .size = (uint64_t)st.st_size };
+        audio_src_result_t r = audio_source_open(&s_src, audio_format_from_name(c->relative), &io);
+        if (r != AUDIO_SRC_OK) set_error(audio_src_text(r));
         else {
             snprintf(s_file_volume, sizeof s_file_volume, "%s", c->volume);
             snprintf(s_file_relative, sizeof s_file_relative, "%s", c->relative);
-            *out = info;
-            s_byte_rate = info.sample_rate * info.channels * 2;
-            uint32_t duration_ms = (uint32_t)((uint64_t)info.data_bytes * 1000 / s_byte_rate);
+            s_byte_rate = s_src.sample_rate * s_src.channels * 2;
+            /* FLAC may omit its length: then the duration is unknown (0). */
+            uint32_t duration_ms = (uint32_t)(s_src.total_frames * 1000 / s_src.sample_rate);
             taskENTER_CRITICAL(&s_mux);
             s_status.state = AUDIO_PLAYING;
             snprintf(s_status.volume_name, sizeof s_status.volume_name, "%s", c->volume);
             snprintf(s_status.relative, sizeof s_status.relative, "%s", c->relative);
-            s_status.sample_rate = info.sample_rate;
-            s_status.channels = info.channels;
+            snprintf(s_status.format, sizeof s_status.format, "%s",
+                     s_src.format == AUDIO_FORMAT_FLAC ? "FLAC" : "WAV");
+            s_status.source_bits = s_src.source_bits;
+            s_status.sample_rate = s_src.sample_rate;
+            s_status.channels = s_src.channels;
             s_status.position_ms = s_status.elapsed_ms = s_status.loops = 0;
             s_status.underruns = 0;
             s_status.last_error[0] = 0;
@@ -175,30 +210,35 @@ static bool open_file(const cmd_t *c, wav_info_t *out)
             taskEXIT_CRITICAL(&s_mux);
             ok = true;
         }
-        if (!ok) close_file_locked();
     }
+    if (!ok) close_file_locked();
+    s_io_locked = false;
     storage_unlock();
     return ok;
+}
+
+static void finish_file(void)
+{
+    audio_source_close(&s_src);
+    if (storage_lock(5000)) { close_file_locked(); storage_unlock(); }
 }
 
 static void reader_task(void *arg)
 {
     (void)arg;
     bool reading = false;
-    uint32_t remaining = 0;   /* bytes left in this pass */
-    uint64_t budget = 0;      /* bytes left before the loop limit */
-    wav_info_t info = {0};
+    uint64_t budget = 0;      /* frames left before the loop limit */
     for (;;) {
         cmd_t c;
         if (xQueueReceive(s_cmd, &c, reading ? 0 : portMAX_DELAY) == pdTRUE) {
             stop_writer();
-            if (storage_lock(5000)) { close_file_locked(); storage_unlock(); }
+            if (reading) finish_file();
             reading = false;
-            if (c.op == CMD_PLAY && open_file(&c, &info)) {
-                remaining = info.data_bytes;
-                budget = s_status.loop ? (uint64_t)AUDIO_LOOP_LIMIT_MS / 1000 * s_byte_rate : UINT64_MAX;
-                ESP_LOGI(TAG, "playing %s/%s (%u Hz, %u ch%s)", c.volume, c.relative,
-                         (unsigned)info.sample_rate, info.channels, s_status.loop ? ", loop" : "");
+            if (c.op == CMD_PLAY && open_file(&c)) {
+                budget = s_status.loop ? (uint64_t)AUDIO_LOOP_LIMIT_MS / 1000 * s_src.sample_rate : UINT64_MAX;
+                ESP_LOGI(TAG, "playing %s/%s (%s %u-bit, %u Hz, %u ch%s)", c.volume, c.relative,
+                         s_status.format, s_src.source_bits, (unsigned)s_src.sample_rate,
+                         s_src.channels, s_status.loop ? ", loop" : "");
                 reading = true;
                 s_reader_done = false;
                 s_writer_active = true;
@@ -207,36 +247,32 @@ static void reader_task(void *arg)
             continue;
         }
         if (!s_writer_active) {             /* codec failed to open or write */
-            if (storage_lock(5000)) { close_file_locked(); storage_unlock(); }
+            finish_file();
             reading = false;
             continue;
         }
         if (xStreamBufferSpacesAvailable(s_stream) < READ_CHUNK) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
-        if (!storage_lock(100)) continue;   /* the stream buffer covers short waits */
-        size_t n = 0, want = remaining < READ_CHUNK ? remaining : READ_CHUNK;
+        size_t frame_bytes = s_src.channels * 2u, want = READ_CHUNK / frame_bytes;
         if (want > budget) want = (size_t)budget;
-        if (s_file && want) {
-            n = fread(s_read_buf, 1, want, s_file);
-            if (!n) set_error(ferror(s_file) ? "read error" : "file shorter than its header");
-        } else if (!s_file && remaining) {
-            set_error("file released by storage");
-        }
-        n -= n % (info.channels * 2);         /* whole frames only */
-        remaining = n ? remaining - (uint32_t)n : 0;
-        budget -= n;
-        if (!remaining && budget && n && s_file && s_status.loop) {
-            /* Seamless repeat: rewind to the first sample of the data chunk. */
-            if (fseek(s_file, (long)info.data_offset, SEEK_SET)) set_error("seek failed");
-            else remaining = info.data_bytes;
-        }
-        if (remaining && !budget) {
+        size_t got = want ? audio_source_read(&s_src, (int16_t *)s_read_buf, want) : 0;
+        budget -= got;
+        bool more = got == want && budget;
+        if (got < want) {
+            /* End of a pass, or the stream failed. */
+            io_lock();
+            bool released = !s_file;
+            io_unlock();
+            if (released) set_error("file released by storage");
+            else if (s_src.error) set_error("read error or corrupt stream");
+            else if (s_status.loop && budget) {
+                if (audio_source_rewind(&s_src)) more = true;   /* seamless repeat */
+                else set_error("rewind failed");
+            }
+        } else if (!budget && s_status.loop) {
             ESP_LOGI(TAG, "loop limit reached");
-            remaining = 0;
         }
-        if (!remaining) close_file_locked();
-        storage_unlock();
-        if (n) xStreamBufferSend(s_stream, s_read_buf, n, portMAX_DELAY);
-        if (!remaining) { reading = false; s_reader_done = true; }
+        if (got) xStreamBufferSend(s_stream, s_read_buf, got * frame_bytes, portMAX_DELAY);
+        if (!more) { finish_file(); reading = false; s_reader_done = true; }
     }
 }
 
@@ -290,7 +326,7 @@ bool audio_mgr_start(void)
     taskEXIT_CRITICAL(&s_mux);
     /* The writer feeds DMA, so it outranks the reader and the display. */
     if (xTaskCreate(writer_task, "audio_out", 4096, NULL, 7, &s_writer) != pdPASS ||
-        xTaskCreate(reader_task, "audio_in", 4096, NULL, 5, NULL) != pdPASS) return false;
+        xTaskCreate(reader_task, "audio_in", 8192, NULL, 5, NULL) != pdPASS) return false;
     s_status.available = true;
     ESP_LOGI(TAG, "ES8311 ready");
     return true;

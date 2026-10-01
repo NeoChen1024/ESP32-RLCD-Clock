@@ -18,15 +18,19 @@ rlcd_time_scale_monitor_implementation_notes.md      active progress and agreed 
 common/                                              shared pure-C render, clock and storage code
   time_model.{h,c} render_faces.{h,c} frame_export.{h,c} display_geometry.h
   clock_health.{h,c} sensor_health.{h,c} storage_files.{h,c}
+  tz_rule leap_table sha1 wav_format audio_source (WAV/FLAC decoding)
 host/                                                host-first simulator (SDL3 + u8g2)
   src/    host platform code only: main, host_time glue, SDL3 backend
-  tests/  eleven host tests, including sensor freshness, RTC policy, TZ/leap parsing, Wi-Fi secrets and config selection
+  tests/  thirteen host tests, including sensor freshness, RTC policy, TZ/leap parsing, WAV/FLAC decoding, Wi-Fi secrets and config selection
 firmware/                                            ESP-IDF v6.0.2 target firmware
-  main/       app, CLI, Wi-Fi/SNTP/HTTP, storage/config, display, sensors
+  main/       app, CLI, Wi-Fi/SNTP/HTTP, storage/config, display, sensors, audio
   components/ u8g2 (submodule) + u8g2_st7305 SPI backend
 u8g2/                                                u8g2 submodule (drawing engine)
+contrib/dr_libs/                                     dr_libs submodule (dr_flac FLAC decoder)
 docs/                                                architecture, hardware notes and schematic
 ```
+
+Fetch both submodules before building: `git submodule update --init`.
 
 The render path is shared: `common/time_model.c`, `render_faces.c` and
 `frame_export.c` are compiled **verbatim** into both the host simulator and
@@ -42,7 +46,7 @@ time-scale math.
 ```sh
 cmake -S host -B host/build -DCMAKE_BUILD_TYPE=Release
 cmake --build host/build -j
-ctest --test-dir host/build --output-on-failure   # eleven host tests
+ctest --test-dir host/build --output-on-failure   # thirteen host tests
 host/build/rlcd_host                              # window (15 Hz cap, nearest-neighbor)
 host/build/rlcd_host --scale 2
 host/build/rlcd_host --pbm out.pbm                # headless single-frame dump
@@ -137,11 +141,11 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
 
 - **Host simulator**: working — single face renders all time-scale fields
   from the system clock, sync/Wi-Fi/battery states exercisable from the
-  keyboard, headless PBM/BMP/PNG export, 15 Hz frame cap, eleven CTest targets.
+  keyboard, headless PBM/BMP/PNG export, 15 Hz frame cap, thirteen CTest targets.
 - **Firmware**: working — full UI ported to the panel and verified on
   hardware (time/sensors/telemetry all live), Wi-Fi + SNTP + HTTP +
   CLI bring-up complete, 1 Hz second-aligned refresh.
-- **Not yet**: alarm scheduling, FLAC playback,
+- **Not yet**: alarm scheduling,
   leap-table status on the face, RTC drift calibration, custom icon fonts,
   low-battery visual polish —
   see [remaining work](rlcd_time_scale_monitor_implementation_notes.md#remaining-work).
@@ -171,8 +175,9 @@ curl -X DELETE http://<device>/fs/sd/sounds/alarm.wav
 ```
 
 Managed files are `config/<ASCII name>.json` (JSON objects, max 16 KiB,
-max nesting 16), `sounds/<ASCII name>.wav` (16-bit PCM, mono/stereo, 8–48 kHz,
-max 64 MiB and available space permitting) and
+max nesting 16), `sounds/<ASCII name>.wav` or `.flac` (WAV: 16-bit PCM; FLAC: native, any
+bit depth; both mono/stereo, 8–48 kHz, max 64 MiB and available space
+permitting) and
 `time/leap-seconds.list` (IERS format with a matching SHA-1 line, max 16 KiB;
 replaced in place) and `secrets/wifi.json` (known networks; replaced in place,
 never downloadable). Config versions
@@ -201,7 +206,7 @@ version and anything newer, and deletes only older versions; see
 CLI timezone and NTP overrides take priority until reset. Uploading a config
 requires a new filename
 (409 if already present); the web editor creates a timestamped version and
-retains older files. Invalid config or unplayable WAV returns 422. Alarm
+retains older files. Invalid config or an undecodable sound returns 422. Alarm
 configuration is still pending. Paths are case-sensitive at the API;
 percent-encode spaces, and use no query parameters. Root, `config/`,
 `sounds/`, `time/` and `secrets/` listings return JSON; file listings show at most 256 entries.

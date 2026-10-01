@@ -8,8 +8,8 @@
   <p id="space" class="muted">Loading storage…</p><p id="active" class="muted">Checking selected configuration…</p>
 </section>
 <section>
-  <h2>Upload files</h2><div id="drop"><strong>Drop files here</strong><div><input id="upload" type="file" multiple accept=".json,.wav,.list" aria-label="Choose JSON, WAV, wifi.json or leap-seconds.list files"></div><button class="primary" id="send">Upload files</button></div>
-  <p class="muted">JSON files become new, timestamped versions in <code>config/</code> (16 KiB each). WAV files go into <code>sounds/</code> (16 MiB each). WAV names use ASCII letters, numbers, spaces, underscores, hyphens and periods. An IERS <code>leap-seconds.list</code> replaces <code>time/leap-seconds.list</code> only if its SHA-1 line verifies. A file named <code>wifi.json</code> replaces the write-only <code>secrets/wifi.json</code>; it cannot be downloaded or edited here.</p>
+  <h2>Upload files</h2><div id="drop"><strong>Drop files here</strong><div><input id="upload" type="file" multiple accept=".json,.wav,.flac,.list" aria-label="Choose JSON, WAV, FLAC, wifi.json or leap-seconds.list files"></div><button class="primary" id="send">Upload files</button></div>
+  <p class="muted">JSON files become new, timestamped versions in <code>config/</code> (16 KiB each). WAV and FLAC files go into <code>sounds/</code> (64 MiB each). Sound names use ASCII letters, numbers, spaces, underscores, hyphens and periods. An IERS <code>leap-seconds.list</code> replaces <code>time/leap-seconds.list</code> only if its SHA-1 line verifies. A file named <code>wifi.json</code> replaces the write-only <code>secrets/wifi.json</code>; it cannot be downloaded or edited here.</p>
   <progress id="progress" value="0" max="100" aria-label="Upload progress"></progress><p id="message" role="status" aria-live="polite"></p>
 </section>
 <section>
@@ -116,7 +116,7 @@ async function upload(){
       let path;
       if(file.name.toLowerCase()==='wifi.json')path='secrets/wifi.json';
       else if(file.name.toLowerCase().endsWith('.json'))path=versionName();
-      else if(file.name.endsWith('.wav'))path='sounds/'+file.name;
+      else if(file.name.endsWith('.wav')||file.name.endsWith('.flac'))path='sounds/'+file.name;
       else if(file.name==='leap-seconds.list')path='time/leap-seconds.list';
       else throw Error('Unsupported file: '+file.name);
       message('Uploading '+file.name+' to '+path);$('progress').value=0;

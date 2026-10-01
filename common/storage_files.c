@@ -1,6 +1,6 @@
 #include "storage_files.h"
 #include "leap_table.h"
-#include "wav_format.h"
+#include "audio_source.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -45,7 +45,8 @@ bool storage_file_allowed(const char *s)
     if (!strncmp(s, "sounds/", 7)) {
         const char *name = s + 7;
         size_t len = strlen(name);
-        return len > 4 && !strcmp(name + len - 4, ".wav") && managed_basename(name, 4);
+        return (len > 4 && !strcmp(name + len - 4, ".wav") && managed_basename(name, 4)) ||
+               (len > 5 && !strcmp(name + len - 5, ".flac") && managed_basename(name, 5));
     }
     return false;
 }
@@ -174,9 +175,8 @@ bool storage_validate_file(const char *relative, const char *path)
     }
     bool ok = false;
     if (!strncmp(relative, "sounds/", 7)) {
-        /* Only files the player can play are accepted. */
-        wav_info_t info;
-        ok = wav_parse(f, (uint64_t)st.st_size, &info) == WAV_OK;
+        /* Only files the player can decode are accepted. */
+        ok = audio_probe(relative, f, (uint64_t)st.st_size) == AUDIO_SRC_OK;
     } else {
         size_t n = (size_t)st.st_size;
         char *buf = malloc(n + 1);

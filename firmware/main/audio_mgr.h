@@ -5,7 +5,7 @@
 #include "storage_files.h"
 
 /*
- * WAV playback on the ES8311 DAC + speaker PA (I2S0 TX, MCLK 16, BCLK 9,
+ * WAV/FLAC playback on the ES8311 DAC + speaker PA (I2S0 TX, MCLK 16, BCLK 9,
  * WS 45, DOUT 8, PA enable GPIO 46; control on the shared I2C bus).
  *
  * A reader task takes the storage mutex only around each chunk read and
@@ -24,6 +24,8 @@ typedef struct {
     bool volume_override;       /* CLI value in effect instead of config */
     char volume_name[8];
     char relative[STORAGE_REL_MAX];
+    char format[6];             /* "WAV" or "FLAC" */
+    uint16_t source_bits;       /* file bit depth; output is 16-bit */
     uint32_t sample_rate;
     uint16_t channels;
     bool loop;                  /* repeating within AUDIO_LOOP_LIMIT_MS */
@@ -40,7 +42,7 @@ bool audio_mgr_start(void);
  * longer than the limit (which then plays exactly once), is not cut. */
 #define AUDIO_LOOP_LIMIT_MS (10U * 60U * 1000U)
 
-/* Queue playback of a managed sounds/<name>.wav file; replaces any current one.
+/* Queue playback of a managed sounds/<name>.wav or .flac file; replaces any current one.
  * Returns false if the request is malformed or the queue is full; open
  * and format errors are reported through last_error. */
 bool audio_mgr_play(const char *volume, const char *relative, bool loop);

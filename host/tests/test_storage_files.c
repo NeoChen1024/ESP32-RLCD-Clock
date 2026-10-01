@@ -51,6 +51,7 @@ int main(void)
     assert(!strcmp(volume,"sd") && !strcmp(rel,version));
     assert(storage_parse_uri("/fs/flash/sounds/alarm%20one.wav", volume, rel));
     assert(!strcmp(rel,"sounds/alarm one.wav"));
+    assert(storage_parse_uri("/fs/sd/sounds/alarm.flac", volume, rel));
     assert(storage_parse_uri("/fs/flash/", volume, rel));
     assert(storage_parse_uri("/fs/sd/config/", volume, rel));
     assert(storage_parse_uri("/fs/sd/time/", volume, rel));
@@ -63,7 +64,7 @@ int main(void)
         "/fs/sd/config/../config/foo.json", "/fs/sd/.rlcd-txn/record", "/fs/sd/sounds/ALARM~1.WAV",
         "/fs/sd/config/x.json?x=1", "/fs/other/config/x.json", "/fs/sd//config/x.json",
         "/fs/sd/sounds/%", "/fs/sd/sounds/a%0d.wav", "/fs/sd/sounds/.hidden.wav",
-        "/fs/sd/sounds/sub/a.wav", "/fs/sd/time/other.list", "/fs/sd/time/leap-seconds.list.bak",
+        "/fs/sd/sounds/sub/a.wav", "/fs/sd/sounds/a.FLAC", "/fs/sd/sounds/a.mp3", "/fs/sd/time/other.list", "/fs/sd/time/leap-seconds.list.bak",
         "/fs/sd/time/sub/leap-seconds.list", "/fs/sd/secrets/other.json", "/fs/sd/secrets/wifi.json.bak",
         "/fs/sd/cleanup"};
     for (unsigned i = 0; i < sizeof bad/sizeof bad[0]; ++i) assert(!storage_parse_uri(bad[i],volume,rel));

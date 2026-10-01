@@ -13,7 +13,8 @@ host/
     main.c            SDL3 main loop, 15 Hz frame cap, keyboard input
     host_time.c       platform glue: time_model_now() (system clock and local zone)
     sdl3_backend.{h,c} u8g2 display callback + SDL3 presenter (400x300 visible, 400x304 buffer)
-  tests/            eleven CTest targets for rendering, time, TZ/leap, sensors, RTC, network, storage, config and Wi-Fi secrets
+  tests/            thirteen CTest targets for rendering, time, TZ/leap, audio decoding, sensors, RTC, network, storage, config and Wi-Fi secrets
+  tests/data/       small WAV/FLAC fixtures (ffmpeg tone, flac --best --no-padding)
   sample.png         single-face screenshot (--png output)
 ../common/            shared pure-C sources, compiled by host and firmware:
   time_model.{h,c}   integer time-scale derivations (MJD-TAI, GPS week/TOW, civil, ISO week)
@@ -22,6 +23,8 @@ host/
   tz_rule.{h,c}      POSIX TZ rule parsing and local offset
   leap_table.{h,c}   leap-seconds.list parsing, SHA-1 check and TAI−UTC lookup
   sha1.{h,c}         minimal SHA-1 for the leap table hash
+  wav_format.{h,c}   RIFF/WAVE header parsing
+  audio_source.{h,c} WAV/FLAC (dr_flac from ../contrib/dr_libs) to 16-bit PCM
   clock_health.{h,c} monotonic trust and clock-step policy
   sensor_health.{h,c} bounded last-good SHTC3 sample policy
   rtc_clock.{h,c}   PCF85063A calendar and boot-age validation
@@ -86,7 +89,9 @@ A rendered sample is in [`sample.png`](sample.png) (400x300, RGBA).
 ctest --test-dir host/build --output-on-failure
 ```
 
-The eleven CTest targets cover time math, POSIX TZ rules checked against
+The thirteen CTest targets cover time math, WAV header parsing, bit-exact
+FLAC (16/24-bit) decoding against a WAV reference with rewind and damage
+detection, POSIX TZ rules checked against
 glibc, leap-seconds.list hash and step validation, frame encoding, monotonic trust and
 clock-step scheduling, firmware Wi-Fi/SNTP managers with a fake IDF transport
 (including known-network scan order, failover and backoff), `wifi.json`

@@ -1,4 +1,5 @@
 #include "wav_format.h"
+#include <limits.h>
 #include <string.h>
 
 #define WAVE_FORMAT_PCM        0x0001
@@ -11,24 +12,39 @@ static uint32_t le32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] 
 static const uint8_t pcm_guid[16] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00,
                                      0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71};
 
+static size_t file_read(void *ctx, void *buf, size_t n) { return fread(buf, 1, n, ctx); }
+static bool file_seek(void *ctx, uint64_t offset) { return offset <= LONG_MAX && !fseek(ctx, (long)offset, SEEK_SET); }
+
+audio_io_t audio_io_file(FILE *f, uint64_t size)
+{
+    return (audio_io_t){ .read = file_read, .seek = file_seek, .ctx = f, .size = size };
+}
+
 wav_result_t wav_parse(FILE *f, uint64_t file_size, wav_info_t *out)
 {
+    audio_io_t io = audio_io_file(f, file_size);
+    return wav_parse_io(&io, out);
+}
+
+wav_result_t wav_parse_io(const audio_io_t *io, wav_info_t *out)
+{
     uint8_t h[40];
+    uint64_t file_size = io->size;
     memset(out, 0, sizeof *out);
-    if (file_size < 12 || fseek(f, 0, SEEK_SET) || fread(h, 1, 12, f) != 12 ||
+    if (file_size < 12 || !io->seek(io->ctx, 0) || io->read(io->ctx, h, 12) != 12 ||
         memcmp(h, "RIFF", 4) || memcmp(h + 8, "WAVE", 4)) return WAV_NOT_RIFF;
     bool have_fmt = false;
     uint16_t format = 0, block_align = 0;
     uint64_t pos = 12;
     /* The RIFF size may be stale in streamed files; bound chunks by the file. */
     while (pos + 8 <= file_size) {
-        if (fseek(f, (long)pos, SEEK_SET) || fread(h, 1, 8, f) != 8) return WAV_BAD_CHUNKS;
+        if (!io->seek(io->ctx, pos) || io->read(io->ctx, h, 8) != 8) return WAV_BAD_CHUNKS;
         uint32_t size = le32(h + 4);
         uint64_t body = pos + 8;
         if (!memcmp(h, "fmt ", 4)) {
             if (have_fmt || size < 16 || body + size > file_size) return WAV_BAD_CHUNKS;
             size_t n = size < sizeof h ? size : sizeof h;
-            if (fread(h, 1, n, f) != n) return WAV_BAD_CHUNKS;
+            if (io->read(io->ctx, h, n) != n) return WAV_BAD_CHUNKS;
             format = le16(h);
             out->channels = le16(h + 2);
             out->sample_rate = le32(h + 4);

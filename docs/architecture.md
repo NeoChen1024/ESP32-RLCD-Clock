@@ -138,16 +138,27 @@ work. A play is answered with 202, and open or format errors then appear in
 `GET /audio`. Like the rest of the LAN API, these endpoints are
 unauthenticated.
 
-`sounds/*.wav` files must be 16-bit linear PCM (WAVE_FORMAT_PCM, or
-EXTENSIBLE with the PCM subformat), mono or stereo, at 8–48 kHz, and at most
-64 MiB. `common/wav_format.c` checks this both on upload and before
-playback. Playback uses ES8311 on I²S0 (TX only, Philips standard format,
+Sound files live in `sounds/`, at most 64 MiB each, and must be mono or
+stereo at 8–48 kHz.
+
+- `.wav`: 16-bit linear PCM (WAVE_FORMAT_PCM, or EXTENSIBLE with the PCM
+  subformat).
+- `.flac`: native FLAC (not Ogg) at any bit depth. dr_flac converts samples
+  to 16 bits by keeping the top 16, without dither. dr_flac is tracked as
+  the `contrib/dr_libs` submodule, pinned to an upstream master commit that
+  includes the parsing and seek fixes made after the `flac-0.13.3` tag.
+
+`common/audio_source.c` presents both formats as interleaved 16-bit frames.
+The same code validates uploads by opening the file and decoding its first
+block, and decodes during playback. dr_flac's allocations exceed the 16 KiB
+internal-RAM threshold, so they land in PSRAM. Playback uses ES8311 on I²S0 (TX only, Philips standard format,
 MCLK = 256 × fs) through `esp_codec_dev`. `esp_codec_dev` turns the speaker
 PA on at open and off at close, and reconfigures the I²S clock for each
 file's sample rate.
 
-The player has two tasks. The reader holds the storage mutex only for each
-8 KiB read and fills a 512 KiB PSRAM stream buffer (about 3 s of 44.1 kHz
+The player has two tasks. The reader decodes into 8 KiB chunks. Its I/O
+callbacks hold the storage mutex only around each `fread` or `fseek`, never
+while decoding. It fills a 512 KiB PSRAM stream buffer (about 3 s of 44.1 kHz
 stereo). The higher-priority writer drains that buffer to the codec; an
 empty buffer counts as an underrun, and the auto-cleared DMA plays silence.
 Long HTTP transfers release the mutex after every 4 KiB chunk so the reader
@@ -157,13 +168,14 @@ unmounting or formatting a volume, or deleting or replacing a file, storage
 owners call `audio_mgr_release_locked()`. The reader closes that file, and
 the audio already buffered still plays.
 
-Playback is either single or looped. A loop rewinds to the first sample of
-the data chunk with no gap, and stops after exactly 10 minutes of audio
+Playback is either single or looped. A loop rewinds to the first frame with
+no gap: a WAV seeks to its data chunk, a FLAC calls
+`drflac_seek_to_pcm_frame(0)`. It and stops after exactly 10 minutes of audio
 (`AUDIO_LOOP_LIMIT_MS`), even mid-pass. A single play is never cut. A loop
 request for a file of 10 minutes or longer plays it once, uncut. Volume 0
 mutes. Volumes 1–100 map
 linearly to −40…0 dB, replacing the library's −50…0 dB curve, which made
 mid-range settings very quiet. `esp_codec_dev` then subtracts about 2.4 dB
 of PA-gain compensation (6 dB PA gain, 3.3 V DAC into a 5 V PA), so 100 sets
-the DAC to about −2.4 dB. FLAC decoding, alarm scheduling and buttons are not implemented; see
+the DAC to about −2.4 dB. Alarm scheduling and buttons are not implemented; see
 [remaining work](../rlcd_time_scale_monitor_implementation_notes.md).

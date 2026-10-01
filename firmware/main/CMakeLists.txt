@@ -34,10 +34,13 @@ target_sources(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../../common/leap_table.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/sha1.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/wav_format.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/audio_source.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/render_faces.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/frame_export.c"
 )
 target_include_directories(${COMPONENT_LIB} PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../../common")
+# dr_flac (FLAC decoding) is tracked as the contrib/dr_libs submodule.
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../contrib/dr_libs")
 
 # Capture option 42 independently of the active SNTP table (manual overrides
 # and fallback must not destroy the DHCP selection used by reset/retry).

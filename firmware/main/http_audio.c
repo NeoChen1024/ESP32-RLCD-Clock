@@ -12,12 +12,15 @@ int http_audio_status_json(char *out, size_t size)
     audio_mgr_status(&a);
     bool playing = a.state == AUDIO_PLAYING;
     return snprintf(out, size,
-                    "{\"available\":%s,\"state\":\"%s\",\"file\":\"%s%s%s\",\"loop\":%s,"
+                    "{\"available\":%s,\"state\":\"%s\",\"file\":\"%s%s%s\",\"format\":\"%s\","
+                    "\"source_bits\":%u,\"sample_rate\":%lu,\"channels\":%u,\"loop\":%s,"
                     "\"loops\":%lu,\"position_ms\":%lu,\"elapsed_ms\":%lu,\"duration_ms\":%lu,"
                     "\"loop_limit_ms\":%lu,\"volume\":%d,\"volume_source\":\"%s\","
                     "\"underruns\":%lu,\"error\":\"%s\"}",
                     a.available ? "true" : "false", playing ? "playing" : "idle",
                     playing ? a.volume_name : "", playing ? "/" : "", playing ? a.relative : "",
+                    playing ? a.format : "", playing ? a.source_bits : 0,
+                    playing ? (unsigned long)a.sample_rate : 0UL, playing ? a.channels : 0,
                     playing && a.loop ? "true" : "false", (unsigned long)a.loops,
                     (unsigned long)a.position_ms, (unsigned long)a.elapsed_ms,
                     (unsigned long)a.duration_ms, (unsigned long)AUDIO_LOOP_LIMIT_MS,

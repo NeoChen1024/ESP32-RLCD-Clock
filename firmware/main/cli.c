@@ -304,8 +304,8 @@ static int cmd_audio(int argc, char **argv)
         audio_mgr_status(&st);
         if (!st.available) { printf("audio: unavailable (codec init failed)\n"); return 1; }
         if (st.state == AUDIO_PLAYING) {
-            printf("playing: %s/%s\nformat:  %lu Hz, %u ch, 16-bit\nposition: %lu.%03lu / %lu.%03lu s\n",
-                   st.volume_name, st.relative, (unsigned long)st.sample_rate, st.channels,
+            printf("playing: %s/%s\nformat:  %s %u-bit, %lu Hz, %u ch\nposition: %lu.%03lu / %lu.%03lu s\n",
+                   st.volume_name, st.relative, st.format, st.source_bits, (unsigned long)st.sample_rate, st.channels,
                    (unsigned long)st.position_ms / 1000, (unsigned long)st.position_ms % 1000,
                    (unsigned long)st.duration_ms / 1000, (unsigned long)st.duration_ms % 1000);
             if (st.loop) printf("loop:    pass %lu, %lu / %u s total\n", (unsigned long)st.loops + 1,
@@ -442,7 +442,7 @@ static void register_cmds(void)
         { .command = "leap", .help = "TAI-UTC table from time/leap-seconds.list: status | reload",
           .hint = "[status] | reload",
           .func = cmd_leap },
-        { .command = "audio", .help = "WAV playback: play [sd|flash] <sounds file> [loop] | stop | volume [0-100|reset] | status",
+        { .command = "audio", .help = "WAV/FLAC playback: play [sd|flash] <sounds file> [loop] | stop | volume [0-100|reset] | status",
           .hint = "play [sd|flash] \"<file>\" [loop] | stop | volume [0-100|reset] | status",
           .func = cmd_audio },
         { .command = "sensor", .help = "read SHTC3 temp/humidity and battery voltage",

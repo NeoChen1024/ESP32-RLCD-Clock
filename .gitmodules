@@ -1,3 +1,6 @@
 [submodule "u8g2"]
 	path = u8g2
 	url = https://github.com/olikraus/u8g2.git
+[submodule "contrib/dr_libs"]
+	path = contrib/dr_libs
+	url = https://github.com/mackron/dr_libs.git

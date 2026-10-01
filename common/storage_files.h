@@ -10,7 +10,7 @@
 #define STORAGE_LEAP_FILE "time/leap-seconds.list"
 #define STORAGE_WIFI_SECRETS "secrets/wifi.json"
 /* Canonical managed files: config/<sortable-name>.json,
- * sounds/<ASCII-name>.wav, the single time/leap-seconds.list table and the
+ * sounds/<ASCII-name>.wav or .flac (64 MiB), the single time/leap-seconds.list table and the
  * write-only secrets/wifi.json. Directory paths end with '/'. */
 bool storage_file_allowed(const char *relative);
 bool storage_directory_allowed(const char *relative);
