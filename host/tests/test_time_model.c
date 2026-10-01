@@ -27,6 +27,7 @@ int main(void)
     memset(&m, 0, sizeof m);
     m.unix_ms = 1782055035LL * 1000LL;
     m.time_trusted = true;
+    m.tai_minus_utc_s = TAI_MINUS_UTC_BUILTIN_S;
 
     int64_t day, frac;
     mjd_tai(&m, &day, &frac);
@@ -56,6 +57,14 @@ int main(void)
     if (wd != 6) { printf("FAIL weekday: 2026-06-21 is Sun (wd=6), got %d\n", wd); ok=0; }
     if (iwd != 7) { printf("FAIL iso weekday: Sun=7, got %d\n", iwd); ok=0; }
     if (iy != 2026 || iw != 25) { printf("FAIL iso year/week\n"); ok=0; }
+
+    /* TAI−UTC comes from the model: one second less moves TAI and GPS back. */
+    m.tai_minus_utc_s = TAI_MINUS_UTC_BUILTIN_S - 1;
+    int64_t day2, frac2, w2, tow2;
+    mjd_tai(&m, &day2, &frac2);
+    gps_week_tow(&m, &w2, &tow2);
+    if (w2 != 2424 || tow2 != 55052) { printf("FAIL gps with TAI-UTC 36\n"); ok=0; }
+    if (day2 != 61212 || frac2 != 6373958) { printf("FAIL mjd with TAI-UTC 36 (got %07lld)\n", (long long)frac2); ok=0; }
 
     /* epoch anchor: 1970-01-01 = Thursday */
     memset(&m, 0, sizeof m);

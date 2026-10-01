@@ -18,7 +18,8 @@ i2c_master_bus_handle_t sensors_i2c_bus(void);
  * (e.g. sensor absent); outputs are unchanged on failure. */
 bool sensors_read_temp_humi(float *temp_c, float *rh_pct);
 
-/* Read battery voltage [V] (already scaled by the divider). */
-float sensors_read_batt_v(void);
+/* Read battery voltage [V] (already scaled by the divider). The output is
+ * unchanged on ADC or calibration failure. */
+bool sensors_read_batt_v(float *volts);
 
 #endif

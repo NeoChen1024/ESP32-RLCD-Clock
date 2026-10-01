@@ -13,18 +13,24 @@ idf_component_register(
          "rtc_mgr.c"
          "storage_mgr.c"
          "config_mgr.c"
+         "leap_mgr.c"
+         "wifi_secrets.c"
     INCLUDE_DIRS "."
     EMBED_TXTFILES "files.html" "home.html" "web_style.css"
     REQUIRES esp_wifi esp_netif nvs_flash esp_http_server lwip console esp_timer u8g2 esp_driver_usb_serial_jtag u8g2_st7305 esp_driver_i2c esp_adc fatfs sdmmc esp_driver_sdmmc wear_levelling
 )
 
 # Shared pure-C sources: compile the common/ copies directly so host and
-# target can never drift (design notes §9 / frame_export pattern).
+# target can never drift (see docs/architecture.md).
 target_sources(${COMPONENT_LIB} PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../../common/storage_files.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/clock_health.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/sensor_health.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/rtc_clock.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/time_model.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/tz_rule.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/leap_table.c"
+    "${CMAKE_CURRENT_LIST_DIR}/../../common/sha1.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/render_faces.c"
     "${CMAKE_CURRENT_LIST_DIR}/../../common/frame_export.c"
 )

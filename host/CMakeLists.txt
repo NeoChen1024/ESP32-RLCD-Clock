@@ -47,6 +47,11 @@ target_include_directories(test_clock_health PRIVATE ../common)
 target_compile_options(test_clock_health PRIVATE -UNDEBUG)
 add_test(NAME clock_health COMMAND test_clock_health)
 
+add_executable(test_sensor_health tests/test_sensor_health.c ../common/sensor_health.c)
+target_include_directories(test_sensor_health PRIVATE ../common)
+target_compile_options(test_sensor_health PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME sensor_health COMMAND test_sensor_health)
+
 add_executable(test_rtc_clock tests/test_rtc_clock.c ../common/rtc_clock.c)
 target_include_directories(test_rtc_clock PRIVATE ../common)
 target_compile_options(test_rtc_clock PRIVATE -UNDEBUG -Wall -Wextra -Werror)
@@ -68,15 +73,31 @@ add_test(NAME render_trust COMMAND test_render_trust)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(CJSON REQUIRED IMPORTED_TARGET libcjson)
-add_executable(test_storage_files tests/test_storage_files.c ../common/storage_files.c)
+add_executable(test_tz_leap tests/test_tz_leap.c ../common/tz_rule.c
+  ../common/leap_table.c ../common/sha1.c)
+target_include_directories(test_tz_leap PRIVATE ../common)
+target_compile_options(test_tz_leap PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_test(NAME tz_leap COMMAND test_tz_leap)
+
+add_executable(test_storage_files tests/test_storage_files.c ../common/storage_files.c
+  ../common/leap_table.c ../common/sha1.c)
 target_include_directories(test_storage_files PRIVATE ../common)
 target_link_libraries(test_storage_files PRIVATE PkgConfig::CJSON)
 target_compile_options(test_storage_files PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 add_test(NAME storage_files COMMAND test_storage_files)
 
 add_executable(test_config_mgr tests/test_config_mgr.c ../firmware/main/config_mgr.c
-  ../common/storage_files.c)
+  ../common/storage_files.c ../common/tz_rule.c ../common/leap_table.c ../common/sha1.c)
 target_include_directories(test_config_mgr PRIVATE tests/fakes ../firmware/main ../common)
 target_link_libraries(test_config_mgr PRIVATE PkgConfig::CJSON)
 target_compile_options(test_config_mgr PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 add_test(NAME config_mgr COMMAND test_config_mgr)
+target_compile_definitions(test_config_mgr PRIVATE REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+
+add_executable(test_wifi_secrets tests/test_wifi_secrets.c ../firmware/main/wifi_secrets.c
+  ../common/storage_files.c ../common/leap_table.c ../common/sha1.c)
+target_include_directories(test_wifi_secrets PRIVATE tests/fakes ../firmware/main ../common)
+target_link_libraries(test_wifi_secrets PRIVATE PkgConfig::CJSON)
+target_compile_options(test_wifi_secrets PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_compile_definitions(test_wifi_secrets PRIVATE REPO_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_test(NAME wifi_secrets COMMAND test_wifi_secrets)

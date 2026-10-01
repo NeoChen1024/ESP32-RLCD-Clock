@@ -4,11 +4,12 @@
 
 /*
  * Host-only platform glue for the time model. Not compiled into the ESP32
- * target (which has its own time_model_now / tz_offset_minutes backed by
- * SNTP and a CLI-configurable offset).
+ * target (whose time_model_now is backed by SNTP, a POSIX TZ rule and the
+ * leap-seconds.list table).
  */
 
-/* Fill model from the host system clock (always trusted / NTP_OK). */
+/* Fill model from the host system clock and local zone (always trusted /
+ * NTP_OK, built-in TAI−UTC). */
 void time_model_now(clock_model_t *m)
 {
     struct timespec ts;
@@ -21,17 +22,11 @@ void time_model_now(clock_model_t *m)
     m->temp_c  = 28.4f;
     m->rh_pct  = 61.0f;
     m->batt_v  = 3.91f;
-}
-
-/* Current TZ offset in minutes from the host system local time. */
-int tz_offset_minutes(void)
-{
-    time_t t = time(NULL);
+    m->temp_humi_valid = true;
+    m->batt_valid = true;
+    time_t t = (time_t)ts.tv_sec;
     struct tm tm_local;
-    struct tm tm_utc;
     localtime_r(&t, &tm_local);
-    gmtime_r(&t, &tm_utc);
-    long local_off = tm_local.tm_gmtoff;   /* seconds east of UTC */
-    (void)tm_utc;
-    return (int)(local_off / 60);
+    m->tz_offset_min = (int)(tm_local.tm_gmtoff / 60);  /* seconds east of UTC */
+    m->tai_minus_utc_s = TAI_MINUS_UTC_BUILTIN_S;
 }

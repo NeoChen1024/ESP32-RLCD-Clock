@@ -2,7 +2,7 @@
  * u8g2_st7305 — ST7305 SPI backend for the RLCD 4.2.
  * Source: Waveshare ESP32-S3-RLCD-4.2 example "11_U8G2_Test"
  * (components/u8g2_st7305), with ink-polarity inversion added
- * (this panel renders 0 = black; see display.c / notes §1).
+ * (this panel renders 0 = black; see docs/hardware_notes.md).
  */
 
 #include "u8g2_st7305.h"

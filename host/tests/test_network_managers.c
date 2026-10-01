@@ -130,5 +130,85 @@ int main(void)
     fake_advance(30000000); fake_wifi_tick();
     assert(fake_connect_calls == attempts + 1);
     wifi_mgr_disconnect(); fake_drain();
-    puts("SNTP selection, trust, DHCP recovery and Wi-Fi lifecycle OK");
+
+    /* ---- AUTO: known networks (secrets/wifi.json) ---- */
+    wifi_mgr_network_t known[3] = {{"home", "password1"}, {"lab", ""}, {"cafe", "password3"}};
+    assert(wifi_mgr_set_known(known, 3)); fake_drain();
+    assert(wifi_mgr_status().mode == WIFI_MGR_MODE_OFF && wifi_mgr_status().known == 3);
+    assert(wifi_mgr_status().state == WIFI_MGR_DISCONNECTED); /* OFF ignores the list */
+    unsigned scans = fake_scan_calls;
+    const char *visible[] = {"other", "cafe", "lab", "cafe"};
+    const int8_t rssi[] = {-30, -70, -50, -60};
+    fake_scan_results(4, visible, rssi);
+    wifi_mgr_reset(); fake_drain();
+    assert(wifi_mgr_status().mode == WIFI_MGR_MODE_AUTO);
+    assert(fake_scan_calls == scans + 1);
+    /* Strongest visible known network first: lab -50 beats cafe's best -60. */
+    assert(!strcmp((char *)fake_wifi_config.sta.ssid, "lab"));
+    assert(fake_wifi_config.sta.threshold.authmode == WIFI_AUTH_OPEN);
+    attempts = fake_connect_calls;
+    fake_event(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL); /* lab fails */
+    assert(fake_connect_calls == attempts + 1);
+    assert(!strcmp((char *)fake_wifi_config.sta.ssid, "cafe"));
+    assert(!strcmp((char *)fake_wifi_config.sta.password, "password3"));
+    got_ip();
+    assert(wifi_mgr_status().state == WIFI_MGR_CONNECTED && !strcmp(wifi_mgr_status().ssid, "cafe"));
+
+    /* An unchanged entry keeps the link; a changed password rescans. */
+    scans = fake_scan_calls;
+    assert(wifi_mgr_set_known(known, 3)); fake_drain();
+    assert(wifi_mgr_status().state == WIFI_MGR_CONNECTED && fake_scan_calls == scans);
+    snprintf(known[2].password, sizeof known[2].password, "changed-pass");
+    assert(wifi_mgr_set_known(known, 3)); fake_drain();
+    assert(fake_scan_calls == scans + 1 && !strcmp(wifi_mgr_status().ssid, "lab"));
+    got_ip();
+
+    /* A drop after success rescans on the next tick. */
+    scans = fake_scan_calls;
+    fake_event(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL);
+    fake_wifi_tick();
+    assert(fake_scan_calls == scans + 1 && !strcmp(wifi_mgr_status().ssid, "lab"));
+    got_ip();
+
+    /* No known network visible: rescan after 10 s, then 20 s. */
+    const char *none[] = {"other"};
+    const int8_t none_rssi[] = {-40};
+    fake_scan_results(1, none, none_rssi);
+    scans = fake_scan_calls;
+    fake_event(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL);
+    fake_wifi_tick();
+    assert(fake_scan_calls == scans + 1);
+    assert(wifi_mgr_status().state == WIFI_MGR_CONNECTING && !wifi_mgr_status().ssid[0]);
+    fake_advance(9000000); fake_wifi_tick(); assert(fake_scan_calls == scans + 1);
+    fake_advance(1000000); fake_wifi_tick(); assert(fake_scan_calls == scans + 2);
+    fake_advance(19000000); fake_wifi_tick(); assert(fake_scan_calls == scans + 2);
+    fake_advance(1000000); fake_wifi_tick(); assert(fake_scan_calls == scans + 3);
+
+    /* A stalled attempt is aborted and the next candidate is tried. */
+    const char *two[] = {"home", "lab"};
+    const int8_t two_rssi[] = {-40, -45};
+    fake_scan_results(2, two, two_rssi);
+    fake_advance(60000000); fake_wifi_tick();
+    assert(!strcmp(wifi_mgr_status().ssid, "home"));
+    fake_advance(30000000); fake_wifi_tick();
+    assert(!strcmp(wifi_mgr_status().ssid, "lab"));
+    got_ip();
+
+    /* MANUAL outranks known networks until reset. */
+    assert(wifi_mgr_connect("manual", "", 0)); fake_drain();
+    got_ip();
+    assert(wifi_mgr_status().mode == WIFI_MGR_MODE_MANUAL && !strcmp(wifi_mgr_status().ssid, "manual"));
+    assert(wifi_mgr_set_known(known, 2)); fake_drain();
+    assert(wifi_mgr_status().state == WIFI_MGR_CONNECTED && !strcmp(wifi_mgr_status().ssid, "manual"));
+    wifi_mgr_reset(); fake_drain();
+    assert(wifi_mgr_status().mode == WIFI_MGR_MODE_AUTO && !strcmp(wifi_mgr_status().ssid, "home"));
+    got_ip();
+
+    /* Removing every known network disconnects and stops scanning. */
+    assert(wifi_mgr_set_known(NULL, 0)); fake_drain();
+    assert(wifi_mgr_status().state == WIFI_MGR_DISCONNECTED && !wifi_mgr_status().known);
+    scans = fake_scan_calls;
+    fake_advance(400000000); fake_wifi_tick();
+    assert(fake_scan_calls == scans);
+    puts("SNTP selection, trust, DHCP recovery, Wi-Fi lifecycle and known-network scanning OK");
 }

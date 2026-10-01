@@ -9,6 +9,7 @@
 #include "sntp_mgr.h"
 #include "snapshot.h"
 #include "display.h"
+#include "model.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "http_srv";
@@ -82,7 +83,7 @@ static esp_err_t handler_snapshot_bmp(httpd_req_t *req)
 
 static esp_err_t handler_status(httpd_req_t *req)
 {
-    char body[512];
+    char body[1024];
     int n = 0;
 
     wifi_mgr_status_t w = wifi_mgr_status();
@@ -92,12 +93,13 @@ static esp_err_t handler_status(httpd_req_t *req)
     sntp_mgr_status_t s = sntp_mgr_status();
 
     n += snprintf(body + n, sizeof body - (size_t)n,
-                  "{\"wifi\":{\"state\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},",
-                  wstate, w.ssid, w.ip, w.rssi_dbm);
+                  "{\"wifi\":{\"state\":\"%s\",\"mode\":\"%s\",\"known\":%u,"
+                  "\"ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d},",
+                  wstate, w.mode == WIFI_MGR_MODE_AUTO ? "auto" : w.mode == WIFI_MGR_MODE_MANUAL ? "manual" : "off",
+                  w.known, w.ssid, w.ip, w.rssi_dbm);
     n += snprintf(body + n, sizeof body - (size_t)n,
                   "\"sntp\":{\"started\":%s,\"synced\":%s,\"trusted\":%s,"
-                  "\"fresh\":%s,\"rtc_seeded\":%s,\"age_s\":%lu,\"source\":\"%s\",\"unix\":%lld},"
-                  "\"display_frames\":%lu}",
+                  "\"fresh\":%s,\"rtc_seeded\":%s,\"age_s\":%lu,\"source\":\"%s\",\"unix\":%lld},",
                   s.started ? "true" : "false",
                   s.synced ? "true" : "false",
                   s.time_trusted ? "true" : "false",
@@ -106,7 +108,35 @@ static esp_err_t handler_status(httpd_req_t *req)
                   (unsigned long)s.ntp_age_s,
                   s.using_manual ? "manual" : s.using_config ? "config" :
                   s.using_dhcp ? "dhcp" : "fallback",
-                  (long long)s.unix_sec, (unsigned long)display_frame_count());
+                  (long long)s.unix_sec);
+
+    /* The rule text is validated POSIX TZ syntax: no JSON escapes needed. */
+    tz_rule_t rule;
+    bool cli;
+    model_tz_get(&rule, &cli);
+    bool dst;
+    int offset = tz_rule_offset_minutes(&rule, s.unix_sec, &dst);
+    n += snprintf(body + n, sizeof body - (size_t)n,
+                  "\"tz\":{\"rule\":\"%s\",\"source\":\"%s\",\"offset_min\":%d,\"dst\":%s},",
+                  rule.text, cli ? "cli" : "config", offset, dst ? "true" : "false");
+
+    /* Expiry is only judged against trusted time. */
+    model_leap_info_t leap;
+    model_leap_info(&leap);
+    int tai_utc = model_tai_minus_utc(s.unix_sec);
+    n += snprintf(body + n, sizeof body - (size_t)n,
+                  "\"leap\":{\"source\":\"%s\",\"tai_minus_utc\":%d,\"gps_minus_utc\":%d,",
+                  leap.loaded ? leap.volume : "builtin", tai_utc, tai_utc - TAI_MINUS_GPS_SECONDS);
+    if (leap.loaded)
+        n += snprintf(body + n, sizeof body - (size_t)n,
+                      "\"updated_unix\":%lld,\"expires_unix\":%lld,\"expired\":%s},",
+                      (long long)leap.updated_unix_s, (long long)leap.expires_unix_s,
+                      !s.time_trusted ? "null" : s.unix_sec >= leap.expires_unix_s ? "true" : "false");
+    else
+        n += snprintf(body + n, sizeof body - (size_t)n,
+                      "\"updated_unix\":null,\"expires_unix\":null,\"expired\":null},");
+    n += snprintf(body + n, sizeof body - (size_t)n, "\"display_frames\":%lu}",
+                  (unsigned long)display_frame_count());
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");

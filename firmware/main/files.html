@@ -2,22 +2,23 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RLCD File Manager</title><link rel="stylesheet" href="/web_style.css"></head><body><main>
 <header><div><div class="brand">RLCD TIME SCALE MONITOR</div><h1>Configuration &amp; sounds</h1></div><nav aria-label="Main navigation"><a href="/">Display</a><a href="/files" aria-current="page">Files</a></nav></header>
-<p class="muted">Keep dated configuration versions and upload alarm sounds. The device selects the newest valid JSON from SD first, then internal flash. Alarm playback is not yet implemented.</p>
+<p class="muted">Keep dated configuration versions, Wi-Fi networks and alarm sounds. The device selects the newest valid JSON from SD first, then internal flash. Alarm playback is not yet implemented.</p>
 <section>
   <div class="toolbar"><label for="volume">Storage</label><select id="volume" aria-label="Storage volume"></select><button id="refresh">Refresh</button></div>
   <p id="space" class="muted">Loading storage…</p><p id="active" class="muted">Checking selected configuration…</p>
 </section>
 <section>
-  <h2>Upload files</h2><div id="drop"><strong>Drop files here</strong><div><input id="upload" type="file" multiple accept=".json,.wav" aria-label="Choose JSON or WAV files"></div><button class="primary" id="send">Upload files</button></div>
-  <p class="muted">JSON files become new, timestamped versions in <code>config/</code> (16 KiB each). WAV files go into <code>sounds/</code> (16 MiB each). WAV names use ASCII letters, numbers, spaces, underscores, hyphens and periods.</p>
+  <h2>Upload files</h2><div id="drop"><strong>Drop files here</strong><div><input id="upload" type="file" multiple accept=".json,.wav,.list" aria-label="Choose JSON, WAV, wifi.json or leap-seconds.list files"></div><button class="primary" id="send">Upload files</button></div>
+  <p class="muted">JSON files become new, timestamped versions in <code>config/</code> (16 KiB each). WAV files go into <code>sounds/</code> (16 MiB each). WAV names use ASCII letters, numbers, spaces, underscores, hyphens and periods. An IERS <code>leap-seconds.list</code> replaces <code>time/leap-seconds.list</code> only if its SHA-1 line verifies. A file named <code>wifi.json</code> replaces the write-only <code>secrets/wifi.json</code>; it cannot be downloaded or edited here.</p>
   <progress id="progress" value="0" max="100" aria-label="Upload progress"></progress><p id="message" role="status" aria-live="polite"></p>
 </section>
 <section>
-  <div class="toolbar"><h2 id="heading" style="margin:0;flex:1">Files</h2><button id="up" hidden>Back to root</button><button id="newconfig">New config version</button></div>
+  <div class="toolbar"><h2 id="heading" style="margin:0;flex:1">Files</h2><button id="up" hidden>Back to root</button><button id="cleanup">Clean up old versions</button><button id="newconfig">New config version</button></div>
   <div class="tablewrap"><table><thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 <footer>Versions sort by filename; use UTC timestamp names for chronological order. Old versions remain available until you delete them. Unmount SD in the serial console before removing the card.<br>API: <code>GET /fs/active</code> shows the selected version. Use <code>/fs/flash/…</code> or <code>/fs/sd/…</code> for GET, PUT and DELETE.</footer>
 <dialog id="editor"><h2 id="editname"></h2><p class="muted">Saving creates a new version. Existing files remain unchanged.</p><textarea id="text" spellcheck="false" aria-label="JSON content"></textarea><p id="editerror" role="alert"></p><div class="toolbar"><button class="primary" id="save">Save new version</button><button id="cancel">Cancel</button></div></dialog>
+<dialog id="cleanupdialog"><h2 id="cleanupname"></h2><p id="cleanupnote" class="muted"></p><ul id="cleanuplist"></ul><p id="cleanuperror" role="alert"></p><div class="toolbar"><button class="danger" id="cleanupgo">Delete older versions</button><button id="cleanupcancel">Cancel</button></div></dialog>
 </main><script>
 'use strict';
 const $ = id => document.getElementById(id);
@@ -33,12 +34,15 @@ async function api(path,options){
 }
 function busyState(value){
   busy=value;
-  for(const id of ['volume','send','upload','refresh','up','newconfig'])$(id).disabled=value;
+  for(const id of ['volume','send','upload','refresh','up','newconfig','cleanup'])$(id).disabled=value;
   for(const button of $('rows').querySelectorAll('button'))button.disabled=value;
 }
 async function activeConfig(){
   const state=await(await api('/fs/active')).json();
-  $('active').textContent=state.found?'Selected on this device: '+labels[state.volume]+' /'+state.path+' · TZ '+state.tz_offset_minutes+' min · NTP '+(state.ntp_server||'DHCP/fallback'):'Selected on this device: none (UTC+8, DHCP/fallback)';
+  $('active').textContent=state.found?'Selected on this device: '+labels[state.volume]+' /'+state.path+' · TZ '+state.tz+' · NTP '+(state.ntp_server||'DHCP/fallback'):'Selected on this device: none (TZ '+state.tz+', DHCP/fallback)';
+  const wifi=state.wifi_secrets;
+  $('active').textContent+=' · Wi-Fi '+(wifi.volume?wifi.networks+' known network'+(wifi.networks===1?'':'s')+' from '+labels[wifi.volume]:'no secrets/wifi.json');
+  $('active').textContent+=' · Leap table '+(state.leap.volume==='builtin'?'built-in':labels[state.leap.volume]+', expires '+new Date(state.leap.expires_unix*1000).toISOString().slice(0,10));
   return state;
 }
 async function volumes(){
@@ -69,8 +73,9 @@ async function list(){
     size.textContent=entry.type==='directory'?'—':bytes(entry.size);actions.className='actions';
     if(entry.type==='directory') actions.append(button('Open',async()=>{if(busy)return;folder=entry.name+'/';await list()}));
     else {
-      const path=folder+entry.name,link=document.createElement('a');
-      link.href=url(path);link.textContent='Download';link.download=entry.name;actions.append(link);
+      const path=folder+entry.name;
+      if(folder==='secrets/'){const note=document.createElement('span');note.className='muted';note.textContent='Write-only';actions.append(note)}
+      else{const link=document.createElement('a');link.href=url(path);link.textContent='Download';link.download=entry.name;actions.append(link)}
       if(folder==='config/') actions.append(button('Edit as new version',()=>edit(path)));
       actions.append(button('Delete',async()=>{
         if(busy||!confirm('Delete '+labels[$('volume').value]+' /'+path+'?'))return;
@@ -105,8 +110,10 @@ async function upload(){
   try{
     for(const file of files){
       let path;
-      if(file.name.toLowerCase().endsWith('.json'))path=versionName();
+      if(file.name.toLowerCase()==='wifi.json')path='secrets/wifi.json';
+      else if(file.name.toLowerCase().endsWith('.json'))path=versionName();
       else if(file.name.endsWith('.wav'))path='sounds/'+file.name;
+      else if(file.name==='leap-seconds.list')path='time/leap-seconds.list';
       else throw Error('Unsupported file: '+file.name);
       message('Uploading '+file.name+' to '+path);$('progress').value=0;
       await put(path,file,volume);
@@ -136,6 +143,28 @@ $('save').onclick=async()=>{
   }catch(e){$('editerror').textContent=e.message}finally{$('save').disabled=false}
 };
 $('cancel').onclick=()=>$('editor').close();
+let cleanupVolume='';
+function cleanupItems(items){
+  $('cleanuplist').replaceChildren(...items.map(path=>{const li=document.createElement('li');li.textContent=path;return li}));
+}
+async function cleanupPreview(){
+  if(busy)return;
+  cleanupVolume=$('volume').value;
+  const plan=await(await api('/fs/'+cleanupVolume+'/cleanup')).json();
+  $('cleanupname').textContent='Clean up '+labels[cleanupVolume]+' config versions';
+  $('cleanupnote').textContent=plan.note||(plan.remove.length?'Keeps '+plan.kept+' and any newer files. These older versions will be deleted:':'Nothing to delete: '+plan.kept+' is the oldest version kept.');
+  cleanupItems(plan.remove);$('cleanuperror').textContent='';
+  $('cleanupgo').hidden=!plan.remove.length;$('cleanupdialog').showModal();
+}
+$('cleanup').onclick=()=>cleanupPreview().catch(e=>message(e.message,true));
+$('cleanupgo').onclick=async()=>{
+  $('cleanupgo').disabled=true;
+  try{
+    const result=await(await api('/fs/'+cleanupVolume+'/cleanup',{method:'POST'})).json();
+    $('cleanupdialog').close();message('Deleted '+result.removed.length+' older version'+(result.removed.length===1?'':'s')+'; kept '+result.kept+'.');await refresh();
+  }catch(e){$('cleanuperror').textContent=e.message}finally{$('cleanupgo').disabled=false}
+};
+$('cleanupcancel').onclick=()=>$('cleanupdialog').close();
 $('newconfig').onclick=()=>edit().catch(e=>message(e.message,true));
 $('send').onclick=upload;
 $('upload').onchange=()=>{selected=[];message('Selected '+$('upload').files.length+' file(s).')};

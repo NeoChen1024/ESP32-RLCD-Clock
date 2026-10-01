@@ -1,0 +1,6 @@
+{
+  "networks": [
+    {"ssid": "Example Home", "password": "replace-with-passphrase"},
+    {"ssid": "Example Open Network"}
+  ]
+}

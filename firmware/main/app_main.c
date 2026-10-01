@@ -58,6 +58,6 @@ void app_main(void)
         ESP_LOGE(TAG, "http_srv_start failed");
     }
 
-    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, rtc, tz, config, sensor, sd, flash, http)");
+    ESP_LOGI(TAG, "ready — type `help` (commands: wifi, ntp, rtc, tz, leap, config, sensor, sd, flash, http)");
     cli_start();   /* blocks forever: REPL on USB-Serial/JTAG */
 }

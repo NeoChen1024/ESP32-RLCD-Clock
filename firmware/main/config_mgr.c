@@ -1,4 +1,6 @@
 #include "config_mgr.h"
+#include "leap_mgr.h"
+#include "wifi_secrets.h"
 #include "model.h"
 #include "sntp_mgr.h"
 #include "storage_mgr.h"
@@ -29,13 +31,17 @@ static bool parse_config(const char *path, config_selection_t *parsed)
     free(buf);
     if (!cJSON_IsObject(json)) { cJSON_Delete(json); return false; }
     memset(parsed, 0, sizeof *parsed);
-    parsed->tz_offset_minutes = 480;
-    cJSON *tz = cJSON_GetObjectItemCaseSensitive(json, "tz_offset_minutes");
-    if (tz) {
-        if (!cJSON_IsNumber(tz) || tz->valuedouble < -840 || tz->valuedouble > 840 ||
-            tz->valuedouble != (int)tz->valuedouble) { cJSON_Delete(json); return false; }
-        parsed->tz_offset_minutes = (int)tz->valuedouble;
+    int offset = 480;
+    cJSON *legacy = cJSON_GetObjectItemCaseSensitive(json, "tz_offset_minutes");
+    if (legacy) {
+        if (!cJSON_IsNumber(legacy) || legacy->valuedouble < -840 || legacy->valuedouble > 840 ||
+            legacy->valuedouble != (int)legacy->valuedouble) { cJSON_Delete(json); return false; }
+        offset = (int)legacy->valuedouble;
     }
+    if (!tz_rule_fixed(offset, &parsed->tz)) { cJSON_Delete(json); return false; }
+    cJSON *rule = cJSON_GetObjectItemCaseSensitive(json, "tz");
+    if (rule && (!cJSON_IsString(rule) || !rule->valuestring ||
+                 !tz_rule_parse(rule->valuestring, &parsed->tz))) { cJSON_Delete(json); return false; }
     cJSON *server = cJSON_GetObjectItemCaseSensitive(json, "ntp_server");
     if (server && !cJSON_IsNull(server)) {
         if (!cJSON_IsString(server) || !server->valuestring) { cJSON_Delete(json); return false; }
@@ -64,7 +70,8 @@ static bool candidate(const char *path, void *context)
 bool config_mgr_reload_locked(void)
 {
     const char *volumes[] = {"sd", "flash"};
-    config_selection_t next = {.tz_offset_minutes = 480};
+    config_selection_t next = {0};
+    tz_rule_fixed(480, &next.tz);
     for (unsigned i = 0; i < 2; ++i) {
         const char *volume = volumes[i];
         if (!storage_mounted_locked(volume)) continue;
@@ -79,14 +86,34 @@ bool config_mgr_reload_locked(void)
         snprintf(next.path, sizeof next.path, "%s", selected);
         break;
     }
-    model_tz_set_config(next.tz_offset_minutes);
+    model_tz_set_config(&next.tz);
     sntp_mgr_set_config_server(next.ntp_server[0] ? next.ntp_server : NULL);
     s_selected = next;
-    if (next.found) ESP_LOGI(TAG, "selected %s/%s (TZ %+d, NTP %s)",
-                            next.volume, next.path, next.tz_offset_minutes,
+    if (next.found) ESP_LOGI(TAG, "selected %s/%s (TZ %s, NTP %s)",
+                            next.volume, next.path, next.tz.text,
                             next.ntp_server[0] ? next.ntp_server : "DHCP/fallback");
     else ESP_LOGI(TAG, "no usable config; default TZ and DHCP/fallback NTP");
+    leap_mgr_reload_locked();
+    wifi_secrets_reload_locked();
     return next.found;
+}
+int config_mgr_cleanup_locked(const char *volume, bool apply, char kept[STORAGE_REL_MAX],
+                              void (*visit)(const char *relative, void *context), void *context)
+{
+    kept[0] = 0;
+    if (!storage_mounted_locked(volume)) return CONFIG_CLEANUP_UNMOUNTED;
+    config_selection_t parsed;
+    int selected = storage_config_select(storage_root(volume), candidate, &parsed, kept);
+    if (selected < 0) return -1;
+    if (!selected) return CONFIG_CLEANUP_NO_VALID;
+    int removed = storage_config_cleanup(storage_root(volume), kept, apply, visit, context);
+    if (apply && removed != 0) {
+        if (removed < 0) ESP_LOGW(TAG, "cleanup %s failed; some older versions may remain", volume);
+        else ESP_LOGI(TAG, "cleanup %s: kept %s, removed %d older version%s", volume, kept,
+                      removed, removed == 1 ? "" : "s");
+        config_mgr_reload_locked();
+    }
+    return removed;
 }
 void config_mgr_current_locked(config_selection_t *out) { *out = s_selected; }
 bool config_mgr_reload(void)

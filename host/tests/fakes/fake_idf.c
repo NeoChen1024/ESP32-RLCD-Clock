@@ -5,7 +5,10 @@ static int64_t now_us;
 static ip_addr_t server;
 const char *fake_server_name;
 bool fake_sntp_running;
-unsigned fake_connect_calls, fake_start_calls;
+unsigned fake_connect_calls, fake_start_calls, fake_scan_calls;
+wifi_config_t fake_wifi_config;
+static wifi_ap_record_t scan_records[8];
+static unsigned scan_count;
 static void (*sync_cb)(struct timeval *);
 static void (*policy_cb)(void *);
 static void (*timer_cb)(void *);
@@ -14,7 +17,7 @@ const char *WIFI_EVENT = "wifi", *IP_EVENT = "ip";
 void rtc_mgr_on_sync(int64_t utc_sec) { (void)utc_sec; }
 static struct { esp_event_base_t base; void (*fn)(void *, esp_event_base_t, int32_t, void *); } handlers[3];
 static unsigned handler_count;
-static struct { esp_event_base_t base; int32_t id; unsigned char data[128]; } events[64];
+static struct { esp_event_base_t base; int32_t id; unsigned char data[1024]; } events[64];
 static unsigned head, tail;
 
 const char *esp_err_to_name(int err) { (void)err; return "fake"; }
@@ -45,7 +48,7 @@ int esp_event_handler_register(esp_event_base_t base, int32_t id, void (*fn)(voi
     (void)id; (void)arg; assert(handler_count < 3); handlers[handler_count].base = base; handlers[handler_count++].fn = fn; return 0;
 }
 int esp_event_post(esp_event_base_t base, int32_t id, const void *data, size_t n, int wait) {
-    (void)wait; assert(tail - head < 64 && n <= 128); unsigned i = tail++ % 64;
+    (void)wait; assert(tail - head < 64 && n <= 1024); unsigned i = tail++ % 64;
     events[i].base = base; events[i].id = id; if (n) memcpy(events[i].data, data, n); return 0;
 }
 void fake_event(esp_event_base_t base, int32_t id, void *data) {
@@ -61,12 +64,28 @@ void *esp_netif_create_default_wifi_sta(void) { return (void *)1; }
 int esp_wifi_init(const wifi_init_config_t *x) { (void)x; return 0; }
 int esp_wifi_set_storage(int x) { (void)x; return 0; }
 int esp_wifi_set_mode(int x) { (void)x; return 0; }
-int esp_wifi_set_config(int x, const wifi_config_t *c) { (void)x; (void)c; return 0; }
+int esp_wifi_set_config(int x, const wifi_config_t *c) { (void)x; fake_wifi_config = *c; return 0; }
 int esp_wifi_start(void) { fake_start_calls++; esp_event_post(WIFI_EVENT, WIFI_EVENT_STA_START, NULL, 0, 0); return 0; }
 int esp_wifi_stop(void) { esp_event_post(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL, 0, 0); esp_event_post(WIFI_EVENT, WIFI_EVENT_STA_STOP, NULL, 0, 0); return 0; }
 int esp_wifi_connect(void) { fake_connect_calls++; return 0; }
 int esp_wifi_disconnect(void) { esp_event_post(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, NULL, 0, 0); return 0; }
 int esp_wifi_sta_get_ap_info(wifi_ap_record_t *ap) { ap->rssi = -42; return 0; }
+void fake_scan_results(unsigned n, const char *const *ssids, const int8_t *rssi) {
+    assert(n <= 8); scan_count = n;
+    for (unsigned i = 0; i < n; ++i) {
+        memset(&scan_records[i], 0, sizeof scan_records[i]);
+        memcpy(scan_records[i].ssid, ssids[i], strlen(ssids[i])); scan_records[i].rssi = rssi[i];
+    }
+}
+int esp_wifi_scan_start(const void *config, bool block) {
+    (void)config; (void)block; fake_scan_calls++;
+    esp_event_post(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, NULL, 0, 0); return 0;
+}
+int esp_wifi_scan_stop(void) { return 0; }
+int esp_wifi_scan_get_ap_records(uint16_t *n, wifi_ap_record_t *out) {
+    if (*n > scan_count) *n = (uint16_t)scan_count;
+    memcpy(out, scan_records, *n * sizeof *out); return 0;
+}
 int esp_timer_create(const esp_timer_create_args_t *a, esp_timer_handle_t *out) { timer_cb = a->callback; *out = (void *)1; return 0; }
 int esp_timer_start_periodic(esp_timer_handle_t h, uint64_t period) { (void)h; (void)period; return 0; }
 SemaphoreHandle_t xSemaphoreCreateMutex(void) { static int lock; return &lock; }

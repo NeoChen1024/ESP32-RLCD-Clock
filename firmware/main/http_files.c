@@ -2,6 +2,9 @@
 #include "storage_mgr.h"
 #include "storage_files.h"
 #include "config_mgr.h"
+#include "leap_mgr.h"
+#include "model.h"
+#include "wifi_secrets.h"
 #include "cJSON.h"
 #include <dirent.h>
 #include <errno.h>
@@ -78,8 +81,23 @@ static esp_err_t active_config(httpd_req_t *req)
         cJSON_AddStringToObject(j, "volume", active.volume);
         cJSON_AddStringToObject(j, "path", active.path);
     }
-    cJSON_AddNumberToObject(j, "tz_offset_minutes", active.tz_offset_minutes);
+    cJSON_AddStringToObject(j, "tz", active.tz.text);
     cJSON_AddStringToObject(j, "ntp_server", active.ntp_server);
+    wifi_secrets_info_t secrets;
+    wifi_secrets_current_locked(&secrets);
+    cJSON *wifi = cJSON_AddObjectToObject(j, "wifi_secrets");
+    if (wifi) {
+        if (secrets.found) cJSON_AddStringToObject(wifi, "volume", secrets.volume);
+        else cJSON_AddNullToObject(wifi, "volume");
+        cJSON_AddNumberToObject(wifi, "networks", secrets.count);
+    }
+    model_leap_info_t leap;
+    model_leap_info(&leap);
+    cJSON *table = cJSON_AddObjectToObject(j, "leap");
+    if (table) {
+        cJSON_AddStringToObject(table, "volume", leap.loaded ? leap.volume : "builtin");
+        if (leap.loaded) cJSON_AddNumberToObject(table, "expires_unix", (double)leap.expires_unix_s);
+    }
     return json_response(req, j, "200 OK");
 }
 static int name_compare(const void *a, const void *b)
@@ -103,6 +121,8 @@ static esp_err_t listing(httpd_req_t *req, const char *volume, const char *root,
     if (!*relative) {
         add_entry(entries, "config", true, 0);
         add_entry(entries, "sounds", true, 0);
+        add_entry(entries, "time", true, 0);
+        add_entry(entries, "secrets", true, 0);
     } else {
         snprintf(path, sizeof path, "%s/%.*s", root, (int)strlen(relative) - 1, relative);
         DIR *dir = opendir(path);
@@ -168,7 +188,8 @@ static esp_err_t download(httpd_req_t *req, const char *path, const char *relati
     httpd_resp_set_hdr(req, "Content-Disposition", disposition);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
-    httpd_resp_set_type(req, !strncmp(relative, "sounds/", 7) ? "audio/wav" : "application/json");
+    httpd_resp_set_type(req, !strncmp(relative, "sounds/", 7) ? "audio/wav" :
+                        !strncmp(relative, "time/", 5) ? "text/plain; charset=us-ascii" : "application/json");
     char buffer[4096];
     esp_err_t result = ESP_OK;
     size_t n;
@@ -185,7 +206,7 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
 {
     if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding")) return error(req, "400 Bad Request", "use a Content-Length upload");
     if (!req->content_len || req->content_len > storage_file_limit(relative))
-        return error(req, "413 Content Too Large", "JSON limit 16 KiB; WAV limit 16 MiB; empty files rejected");
+        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV limit 16 MiB; empty files rejected");
     uint64_t total, available;
     if (!storage_space_locked(volume, &total, &available)) return error(req, "503 Service Unavailable", "cannot query storage");
     if (available < req->content_len + 65536ULL) return error(req, "507 Insufficient Storage", "need room for complete temporary upload and metadata");
@@ -217,12 +238,26 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
         snprintf(staged, sizeof staged, "%s/.rlcd-txn/upload", root);
         if (!config_mgr_file_valid(staged)) {
             ok = false; fail_status = "422 Unprocessable Content";
-            fail_text = "invalid config: tz_offset_minutes must be -840..840, ntp_server must be a hostname or omitted";
+            fail_text = "invalid config: tz must be a POSIX TZ rule, tz_offset_minutes -840..840, ntp_server a hostname or omitted";
+        }
+    }
+    if (ok && !strncmp(relative, "secrets/", 8)) {
+        char staged[STORAGE_PATH_MAX];
+        snprintf(staged, sizeof staged, "%s/.rlcd-txn/upload", root);
+        if (!wifi_secrets_file_valid(staged)) {
+            ok = false; fail_status = "422 Unprocessable Content";
+            fail_text = "invalid wifi.json: networks must list up to 8 unique SSIDs (1-32 bytes); "
+                        "password omitted, 8-63 printable ASCII or 64 hex digits";
         }
     }
     if (ok && storage_txn_commit(root)) {
         ok = false;
-        if (errno == EINVAL) { fail_status = "422 Unprocessable Content"; fail_text = "expected a JSON object (depth <=16) or RIFF/WAVE file with matching length"; }
+        if (errno == EINVAL) {
+            fail_status = "422 Unprocessable Content";
+            fail_text = !strncmp(relative, "time/", 5)
+                ? "expected leap-seconds.list with #$, #@ and a matching #h SHA-1 line"
+                : "expected a JSON object (depth <=16) or RIFF/WAVE file with matching length";
+        }
         else fail_text = "file replacement failed";
     }
     if (!ok) {
@@ -230,12 +265,48 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
         return error(req, fail_status, fail_text);
     }
     if (!strncmp(relative, "config/", 7)) config_mgr_reload_locked();
+    if (!strncmp(relative, "time/", 5)) leap_mgr_reload_locked();
+    if (!strncmp(relative, "secrets/", 8)) wifi_secrets_reload_locked();
     return success(req);
+}
+static void cleanup_visit(const char *relative, void *context)
+{
+    cJSON_AddItemToArray(context, cJSON_CreateString(relative));
+}
+/* GET previews and POST applies config cleanup for one volume. */
+static esp_err_t cleanup(httpd_req_t *req, const char *volume)
+{
+    if (req->method == HTTP_POST && req->content_len) return error(req, "400 Bad Request", "cleanup takes no body");
+    cJSON *j = cJSON_CreateObject(), *list = cJSON_CreateArray();
+    if (!j || !list) { cJSON_Delete(j); cJSON_Delete(list); return error(req, "500 Internal Server Error", "out of memory"); }
+    bool apply = req->method == HTTP_POST;
+    char kept[STORAGE_REL_MAX];
+    int result = config_mgr_cleanup_locked(volume, apply, kept, cleanup_visit, list);
+    if (result == CONFIG_CLEANUP_UNMOUNTED) { cJSON_Delete(j); cJSON_Delete(list); return error(req, "503 Service Unavailable", "volume is not mounted"); }
+    if (result == -1 && !apply) { cJSON_Delete(j); cJSON_Delete(list); return error(req, "500 Internal Server Error", "cannot scan config directory"); }
+    cJSON_AddStringToObject(j, "volume", volume);
+    if (kept[0]) cJSON_AddStringToObject(j, "kept", kept);
+    else cJSON_AddNullToObject(j, "kept");
+    cJSON_AddItemToObject(j, apply ? "removed" : "remove", list);
+    cJSON_AddBoolToObject(j, "applied", apply);
+    if (result == CONFIG_CLEANUP_NO_VALID)
+        cJSON_AddStringToObject(j, "note", "no valid config version on this volume; nothing is removed");
+    if (result == -1) {
+        cJSON_AddStringToObject(j, "error", "removal stopped by a filesystem error; remaining older versions were kept");
+        return json_response(req, j, "500 Internal Server Error");
+    }
+    return json_response(req, j, "200 OK");
 }
 static esp_err_t perform(httpd_req_t *req)
 {
     if (!strcmp(req->uri, "/fs/") && req->method == HTTP_GET) return volumes(req);
     if (!strcmp(req->uri, "/fs/active") && req->method == HTTP_GET) return active_config(req);
+    if (!strcmp(req->uri, "/fs/sd/cleanup") || !strcmp(req->uri, "/fs/flash/cleanup")) {
+        const char *volume = req->uri[4] == 's' ? "sd" : "flash";
+        if (req->method != HTTP_GET && req->method != HTTP_POST) return error(req, "405 Method Not Allowed", "use GET to preview or POST to clean up");
+        return cleanup(req, volume);
+    }
+    if (req->method == HTTP_POST) return error(req, "405 Method Not Allowed", "POST is only used for cleanup");
     char volume[8], relative[STORAGE_REL_MAX];
     if (!storage_parse_uri(req->uri, volume, relative)) return error(req, "400 Bad Request", "invalid managed file path");
     if (!storage_mounted_locked(volume)) return error(req, "503 Service Unavailable", "volume is not mounted");
@@ -246,11 +317,17 @@ static esp_err_t perform(httpd_req_t *req)
         return listing(req, volume, root, relative);
     }
     char path[STORAGE_PATH_MAX]; snprintf(path, sizeof path, "%s/%s", root, relative);
-    if (req->method == HTTP_GET) return download(req, path, relative);
+    if (req->method == HTTP_GET) {
+        /* Secrets are write-only over HTTP: upload or delete, never read. */
+        if (!strncmp(relative, "secrets/", 8)) return error(req, "403 Forbidden", "secrets are write-only");
+        return download(req, path, relative);
+    }
     if (req->method == HTTP_PUT) return upload(req, volume, root, relative);
     if (req->method == HTTP_DELETE) {
         if (unlink(path)) return error(req, errno == ENOENT ? "404 Not Found" : "500 Internal Server Error", "delete failed");
         if (!strncmp(relative, "config/", 7)) config_mgr_reload_locked();
+        if (!strncmp(relative, "time/", 5)) leap_mgr_reload_locked();
+        if (!strncmp(relative, "secrets/", 8)) wifi_secrets_reload_locked();
         return success(req);
     }
     return error(req, "405 Method Not Allowed", "unsupported method");
@@ -304,6 +381,7 @@ bool http_files_register(httpd_handle_t server)
         { .uri = "/fs/*", .method = HTTP_GET, .handler = enqueue },
         { .uri = "/fs/*", .method = HTTP_PUT, .handler = enqueue },
         { .uri = "/fs/*", .method = HTTP_DELETE, .handler = enqueue },
+        { .uri = "/fs/*", .method = HTTP_POST, .handler = enqueue },
     };
     for (unsigned i = 0; i < sizeof routes / sizeof routes[0]; ++i)
         if (httpd_register_uri_handler(server, &routes[i]) != ESP_OK) goto fail;

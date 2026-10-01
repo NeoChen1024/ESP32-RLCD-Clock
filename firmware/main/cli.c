@@ -1,6 +1,7 @@
 #include "cli.h"
 
 #include <fcntl.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -12,6 +13,8 @@
 #include "linenoise/linenoise.h"
 #include "model.h"
 #include "config_mgr.h"
+#include "leap_mgr.h"
+#include "wifi_secrets.h"
 #include "rtc_mgr.h"
 #include "sensors.h"
 #include "storage_mgr.h"
@@ -31,7 +34,7 @@ static const char *state_str(wifi_mgr_state_t s)
 static int cmd_wifi(int argc, char **argv)
 {
     if (argc < 2) {
-        printf("usage: wifi connect <ssid> [password] | wifi status | wifi disconnect | wifi reconnect\n");
+        printf("usage: wifi connect <ssid> [password] | status | disconnect | reconnect | reset\n");
         return 1;
     }
     if (strcmp(argv[1], "connect") == 0) {
@@ -49,6 +52,15 @@ static int cmd_wifi(int argc, char **argv)
     }
     if (strcmp(argv[1], "status") == 0) {
         wifi_mgr_status_t st = wifi_mgr_status();
+        printf("mode:  %s\n", st.mode == WIFI_MGR_MODE_AUTO ? "auto (known networks)" :
+               st.mode == WIFI_MGR_MODE_MANUAL ? "manual (wifi connect)" : "off (wifi reset to resume)");
+        if (storage_lock(1000)) {
+            wifi_secrets_info_t secrets;
+            wifi_secrets_current_locked(&secrets);
+            storage_unlock();
+            if (secrets.found) printf("known: %u from %s/%s\n", secrets.count, secrets.volume, STORAGE_WIFI_SECRETS);
+            else printf("known: none (no valid %s)\n", STORAGE_WIFI_SECRETS);
+        }
         printf("state: %s\n", state_str(st.state));
         printf("ssid:  %s\n", st.ssid[0] ? st.ssid : "-");
         printf("ip:    %s\n", st.ip[0] ? st.ip : "-");
@@ -57,7 +69,12 @@ static int cmd_wifi(int argc, char **argv)
     }
     if (strcmp(argv[1], "disconnect") == 0) {
         wifi_mgr_disconnect();
-        printf("disconnected\n");
+        printf("disconnected; automatic connection paused until `wifi reset`\n");
+        return 0;
+    }
+    if (strcmp(argv[1], "reset") == 0) {
+        wifi_mgr_reset();
+        printf("auto mode: scanning for known networks\n");
         return 0;
     }
     if (strcmp(argv[1], "reconnect") == 0) {
@@ -136,24 +153,44 @@ static int cmd_http(int argc, char **argv)
     return 0;
 }
 
-/* ---- tz <±HH:MM | ±HHMM | reset> ---- */
+static void print_offset(const char *label, int minutes)
+{
+    int a = minutes < 0 ? -minutes : minutes;
+    printf("%s%c%02d:%02d (%+d min)", label, minutes < 0 ? '-' : '+', a / 60, a % 60, minutes);
+}
+
+/* ---- tz <POSIX rule | ±HH:MM | ±HHMM | minutes | reset> ---- */
 static int cmd_tz(int argc, char **argv)
 {
     if (argc < 2) {
-        int tz = model_tz_get();
-        printf("tz: %c%02d:%02d (%+d min)\n",
-               tz < 0 ? '-' : '+', (tz < 0 ? -tz : tz) / 60,
-               (tz < 0 ? -tz : tz) % 60, tz);
-        printf("usage: tz <offset> | tz reset\n");
-        printf("  offset: +HH:MM, -HH:MM, +HHMM, or bare minutes (e.g. 480)\n");
+        tz_rule_t rule;
+        bool cli, dst;
+        model_tz_get(&rule, &cli);
+        printf("tz rule: %s (%s)\n", rule.text, cli ? "CLI override" : "selected config");
+        if (sntp_mgr_status().time_trusted) {
+            print_offset("now:     ", tz_rule_offset_minutes(&rule, time(NULL), &dst));
+            printf("%s\n", dst ? " daylight" : "");
+        }
+        printf("usage: tz <rule> | tz <offset> | tz reset\n");
+        printf("  rule:   POSIX TZ, e.g. CST-8 or CET-1CEST,M3.5.0,M10.5.0/3\n");
+        printf("  offset: +HH:MM, -HH:MM, +HHMM, or bare minutes east (e.g. 480)\n");
         return 0;
     }
+    if (argc > 2) { printf("TZ rules contain no spaces\n"); return 1; }
     if (strcmp(argv[1], "reset") == 0) {
         model_tz_set_default();
-        printf("tz reset to selected config (or UTC+8)\n");
+        printf("tz reset to selected config (or %s)\n", MODEL_TZ_DEFAULT);
         return 0;
     }
+    tz_rule_t rule;
     const char *p = argv[1];
+    /* A POSIX rule starts with a zone name; an offset starts with a sign or
+     * digit and, unlike POSIX, counts east of UTC. */
+    if (*p == '<' || (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z')) {
+        if (!tz_rule_parse(p, &rule)) { printf("invalid POSIX TZ rule\n"); return 1; }
+        model_tz_set(&rule);
+        return 0;
+    }
     int sign = 1;
     if (*p == '+' || *p == '-') {
         if (*p == '-') sign = -1;
@@ -189,7 +226,45 @@ static int cmd_tz(int argc, char **argv)
             minutes = (int)v;
         }
     }
-    model_tz_set(sign * minutes);
+    if (!tz_rule_fixed(sign * minutes, &rule)) { printf("offset outside -14:00..+14:00\n"); return 1; }
+    model_tz_set(&rule);
+    printf("tz rule: %s\n", rule.text);
+    return 0;
+}
+
+static void print_utc_date(const char *label, int64_t unix_s)
+{
+    time_t t = (time_t)unix_s;
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    printf("%s%04d-%02d-%02d\n", label, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+}
+
+/* ---- leap [status | reload] ---- */
+static int cmd_leap(int argc, char **argv)
+{
+    if (argc > 2 || (argc == 2 && strcmp(argv[1], "status") && strcmp(argv[1], "reload"))) {
+        printf("usage: leap [status] | reload\n"); return 1;
+    }
+    if (argc == 2 && !strcmp(argv[1], "reload")) {
+        if (!storage_lock(5000)) { printf("storage busy\n"); return 1; }
+        leap_mgr_reload_locked();
+        storage_unlock();
+    }
+    model_leap_info_t info;
+    model_leap_info(&info);
+    sntp_mgr_status_t s = sntp_mgr_status();
+    if (info.loaded) {
+        printf("table:   %s/%s\n", info.volume, LEAP_MGR_RELATIVE);
+        print_utc_date("updated: ", info.updated_unix_s);
+        print_utc_date("expires: ", info.expires_unix_s);
+        printf("state:   %s\n", !s.time_trusted ? "unknown (time untrusted)" :
+               s.unix_sec >= info.expires_unix_s ? "EXPIRED, holding last TAI-UTC" : "current");
+    } else {
+        printf("table:   none; built-in TAI-UTC %d s\n", TAI_MINUS_UTC_BUILTIN_S);
+    }
+    int tai_utc = model_tai_minus_utc(s.unix_sec);
+    printf("TAI-UTC: %d s\nGPS-UTC: %d s\n", tai_utc, tai_utc - TAI_MINUS_GPS_SECONDS);
     return 0;
 }
 
@@ -204,7 +279,9 @@ static int cmd_sensor(int argc, char **argv)
     } else {
         printf("temp: n/a (SHTC3 not responding)\n");
     }
-    printf("batt: %.2f V\n", sensors_read_batt_v());
+    float batt;
+    if (sensors_read_batt_v(&batt)) printf("batt: %.2f V\n", batt);
+    else printf("batt: n/a (ADC unavailable)\n");
     return 0;
 }
 
@@ -218,10 +295,44 @@ static int cmd_flash(int argc, char **argv)
     return storage_flash_command(argc, argv, stdout);
 }
 
+static void print_cleanup_entry(const char *relative, void *context)
+{
+    printf("  %s %s\n", *(bool *)context ? "removed" : "remove ", relative);
+}
+
+/* config cleanup [sd|flash] [confirm]: preview, or remove older versions. */
+static int config_cleanup(int argc, char **argv)
+{
+    const char *only = NULL;
+    bool apply = false;
+    for (int i = 2; i < argc; ++i) {
+        if (!strcmp(argv[i], "confirm")) apply = true;
+        else if (!only && (!strcmp(argv[i], "sd") || !strcmp(argv[i], "flash"))) only = argv[i];
+        else { printf("usage: config cleanup [sd|flash] [confirm]\n"); return 1; }
+    }
+    const char *volumes[] = {"sd", "flash"};
+    int status = 0;
+    if (!storage_lock(5000)) { printf("storage busy\n"); return 1; }
+    for (unsigned i = 0; i < 2; ++i) {
+        if (only && strcmp(only, volumes[i])) continue;
+        char kept[STORAGE_REL_MAX];
+        printf("%s:\n", volumes[i]);
+        int n = config_mgr_cleanup_locked(volumes[i], apply, kept, print_cleanup_entry, &apply);
+        if (n == CONFIG_CLEANUP_UNMOUNTED) printf("  not mounted\n");
+        else if (n == CONFIG_CLEANUP_NO_VALID) printf("  no valid version; nothing removed\n");
+        else if (n < 0) { printf("  error; remaining files kept\n"); status = 1; }
+        else printf("  keep    %s%s\n", kept, n ? "" : " (nothing older)");
+    }
+    storage_unlock();
+    if (!apply) printf("preview only; add `confirm` to remove\n");
+    return status;
+}
+
 static int cmd_config(int argc, char **argv)
 {
+    if (argc >= 2 && !strcmp(argv[1], "cleanup")) return config_cleanup(argc, argv);
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "status") && strcmp(argv[1], "reload"))) {
-        printf("usage: config [status] | reload\n"); return 1;
+        printf("usage: config [status] | reload | cleanup [sd|flash] [confirm]\n"); return 1;
     }
     if (argc == 2 && !strcmp(argv[1], "reload")) config_mgr_reload();
     if (!storage_lock(5000)) { printf("storage busy\n"); return 1; }
@@ -230,8 +341,10 @@ static int cmd_config(int argc, char **argv)
     storage_unlock();
     printf("selected: %s\n", st.found ? st.volume : "none");
     if (st.found) printf("file:     %s\n", st.path);
-    printf("config TZ: %+d min\neffective TZ: %+d min\nconfig NTP: %s\n",
-           st.tz_offset_minutes, model_tz_get(), st.ntp_server[0] ? st.ntp_server : "DHCP/fallback");
+    tz_rule_t effective;
+    model_tz_get(&effective, NULL);
+    printf("config TZ: %s\neffective TZ: %s\nconfig NTP: %s\n",
+           st.tz.text, effective.text, st.ntp_server[0] ? st.ntp_server : "DHCP/fallback");
     return 0;
 }
 
@@ -262,20 +375,23 @@ static int cmd_rtc(int argc, char **argv)
 static void register_cmds(void)
 {
     const esp_console_cmd_t cmds[] = {
-        { .command = "wifi", .help = "Wi-Fi STA control: connect <ssid> [password] | status | disconnect | reconnect",
-          .hint = "connect \"<ssid>\" [password] | status | disconnect | reconnect",
+        { .command = "wifi", .help = "Wi-Fi STA control: connect <ssid> [password] | status | disconnect | reconnect | reset",
+          .hint = "connect \"<ssid>\" [password] | status | disconnect | reconnect | reset",
           .func = cmd_wifi },
         { .command = "ntp", .help = "SNTP control: status | server <host|ip> | reset | resync",
           .hint = "status | server \"<host|ip>\" | reset | resync",
           .func = cmd_ntp },
         { .command = "http", .help = "show HTTP debug endpoints",
           .func = cmd_http },
-        { .command = "tz", .help = "show/set local timezone offset",
-          .hint = "[+HH:MM | -HH:MM | +HHMM | minutes] | reset",
+        { .command = "tz", .help = "show/set local time zone: <POSIX rule> | <offset> | reset",
+          .hint = "[<rule> | +HH:MM | -HH:MM | +HHMM | minutes] | reset",
           .func = cmd_tz },
+        { .command = "leap", .help = "TAI-UTC table from time/leap-seconds.list: status | reload",
+          .hint = "[status] | reload",
+          .func = cmd_leap },
         { .command = "sensor", .help = "read SHTC3 temp/humidity and battery voltage",
           .func = cmd_sensor },
-        { .command = "config", .help = "selected version: status | reload",
+        { .command = "config", .help = "selected version: status | reload | cleanup [sd|flash] [confirm]",
           .func = cmd_config },
         { .command = "rtc", .help = "PCF85063A boot-holdover diagnostics: status",
           .func = cmd_rtc },

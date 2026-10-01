@@ -1,4 +1,5 @@
 #include "storage_files.h"
+#include "leap_table.h"
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -18,7 +19,8 @@ static void path_join(char *out, const char *root, const char *relative)
 }
 bool storage_directory_allowed(const char *s)
 {
-    return !strcmp(s, "") || !strcmp(s, "sounds/") || !strcmp(s, "config/");
+    return !strcmp(s, "") || !strcmp(s, "sounds/") || !strcmp(s, "config/") ||
+           !strcmp(s, "time/") || !strcmp(s, "secrets/");
 }
 static bool managed_basename(const char *name, size_t suffix_length)
 {
@@ -33,6 +35,7 @@ bool storage_file_allowed(const char *s)
 {
     size_t n = strlen(s);
     if (n >= STORAGE_REL_MAX || n < 12) return false;
+    if (!strcmp(s, STORAGE_LEAP_FILE) || !strcmp(s, STORAGE_WIFI_SECRETS)) return true;
     if (!strncmp(s, "config/", 7)) {
         const char *name = s + 7;
         size_t len = strlen(name);
@@ -76,6 +79,7 @@ bool storage_parse_uri(const char *uri, char volume[8], char relative[STORAGE_RE
 }
 size_t storage_file_limit(const char *relative)
 {
+    if (!strcmp(relative, STORAGE_LEAP_FILE)) return LEAP_FILE_MAX;
     return !strncmp(relative, "sounds/", 7) ? STORAGE_WAV_MAX : STORAGE_JSON_MAX;
 }
 
@@ -110,8 +114,57 @@ int storage_config_select(const char *root, storage_config_accept_fn accept,
     }
 }
 
+static int compare_names(const void *a, const void *b) { return strcmp(a, b); }
+
+int storage_config_cleanup(const char *root, const char *keep, bool remove,
+                           void (*visit)(const char *relative, void *context), void *context)
+{
+    if (!root || !keep || strncmp(keep, "config/", 7) || strlen(root) > 24) return -1;
+    char directory[STORAGE_PATH_MAX];
+    snprintf(directory, sizeof directory, "%s/config", root);
+    /* Collect first: unlinking while readdir is open is unspecified. */
+    char (*names)[STORAGE_REL_MAX] = NULL;
+    size_t count = 0, capacity = 0;
+    DIR *dir = opendir(directory);
+    if (!dir) return errno == ENOENT ? 0 : -1;
+    struct dirent *entry;
+    int result = 0;
+    errno = 0;
+    while ((entry = readdir(dir))) {
+        char relative[STORAGE_REL_MAX];
+        int n = snprintf(relative, sizeof relative, "config/%s", entry->d_name);
+        if (n < 0 || (size_t)n >= sizeof relative || !storage_file_allowed(relative) ||
+            strcmp(relative, keep) >= 0) { errno = 0; continue; }
+        if (count == capacity) {
+            size_t next = capacity ? capacity * 2 : 16;
+            void *grown = realloc(names, next * sizeof *names);
+            if (!grown) { result = -1; break; }
+            names = grown; capacity = next;
+        }
+        memcpy(names[count++], relative, (size_t)n + 1);
+        errno = 0;
+    }
+    if (errno) result = -1;
+    if (closedir(dir)) result = -1;
+    if (count) qsort(names, count, sizeof *names, compare_names);
+    for (size_t i = 0; i < count && result >= 0; ++i) {
+        if (visit) visit(names[i], context);
+        if (remove) {
+            char path[STORAGE_PATH_MAX]; path_join(path, root, names[i]);
+            if (unlink(path)) { result = -1; break; }
+        }
+        ++result;
+    }
+    free(names);
+    return result;
+}
+
 bool storage_validate_file(const char *relative, const char *path)
 {
+    if (!strcmp(relative, STORAGE_LEAP_FILE)) {
+        static leap_table_t table;   /* callers hold the storage lock */
+        return leap_table_load(path, &table);
+    }
     FILE *f = fopen(path, "rb");
     if (!f) return false;
     struct stat st;
@@ -206,8 +259,12 @@ int storage_txn_begin(const char *root, const char *relative)
     if (storage_txn_recover(root)) { errno = EIO; return -1; }
     char path[STORAGE_PATH_MAX]; path_join(path, root, ".rlcd-txn");
     if (mkdir(path, 0700) && errno != EEXIST) return -1;
-    if (!strncmp(relative, "sounds/", 7) || !strncmp(relative, "config/", 7)) {
-        path_join(path, root, !strncmp(relative, "sounds/", 7) ? "sounds" : "config");
+    const char *slash = strchr(relative, '/');
+    if (slash) {
+        char directory[STORAGE_REL_MAX];
+        memcpy(directory, relative, (size_t)(slash - relative));
+        directory[slash - relative] = 0;
+        path_join(path, root, directory);
         if (mkdir(path, 0755) && errno != EEXIST) return -1;
     }
     path_join(path, root, ".rlcd-txn/record");

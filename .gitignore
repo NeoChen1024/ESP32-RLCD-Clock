@@ -21,3 +21,9 @@ rlcd_screenshot.pbm
 *.swp
 .DS_Store
 *~
+
+# device config and Wi-Fi secrets (see config.json.example / wifi.json.example)
+config.json
+wifi.json
+/config/
+/secrets/

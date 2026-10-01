@@ -122,7 +122,9 @@ bool sensors_start(void)
 
 bool sensors_read_temp_humi(float *temp_c, float *rh_pct)
 {
-    if (!s_shtc3_present || !s_shtc3) return false;
+    /* Retry even if the boot probe failed: a later responding sensor can
+     * recover without rebooting the clock. */
+    if (!s_shtc3) return false;
 
     /* Wake, then poll measurement (T first, 6 bytes + 2 CRCs). */
     if (!shtc3_write_cmd(SHTC3_CMD_WAKEUP)) return false;
@@ -148,15 +150,13 @@ bool sensors_read_temp_humi(float *temp_c, float *rh_pct)
     return true;
 }
 
-float sensors_read_batt_v(void)
+bool sensors_read_batt_v(float *volts)
 {
     int raw = 0;
-    if (adc_oneshot_read(s_adc, BATT_ADC_CH, &raw) != ESP_OK) {
-        return 0.0f;
-    }
+    if (!volts || !s_adc || !s_adc_cali ||
+        adc_oneshot_read(s_adc, BATT_ADC_CH, &raw) != ESP_OK) return false;
     int mv = 0;
-    if (adc_cali_raw_to_voltage(s_adc_cali, raw, &mv) != ESP_OK) {
-        return 0.0f;
-    }
-    return BATT_DIVIDER * (float)mv / 1000.0f;
+    if (adc_cali_raw_to_voltage(s_adc_cali, raw, &mv) != ESP_OK) return false;
+    *volts = BATT_DIVIDER * (float)mv / 1000.0f;
+    return true;
 }

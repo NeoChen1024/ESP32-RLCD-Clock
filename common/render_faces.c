@@ -123,8 +123,8 @@ static void draw_scale_placeholder(u8g2_t *g, int y, const char *label, const ch
 
 static void render_face_single(u8g2_t *g, const clock_model_t *m)
 {
-    int tz = tz_offset_minutes();
-    char buf[40];
+    int tz = m->tz_offset_min;
+    char buf[80];
 
     /* ---- Top bar (7x13, baseline y=16) ---- */
     u8g2_SetFont(g, FONT_SMALL);
@@ -190,8 +190,18 @@ static void render_face_single(u8g2_t *g, const clock_model_t *m)
     /* ---- Telemetry (bottom, 7x13 at 15px line pitch) ---- */
     u8g2_DrawHLine(g, 8, 266, DISP_W - 16);
     u8g2_SetFont(g, FONT_SMALL);
-    snprintf(buf, sizeof buf, "[tmp] +%.1fC   [rh] %.0f%%   [bat] %.2fV",
-             m->temp_c, m->rh_pct, m->batt_v);
+    char temp[16], humidity[16], battery[16];
+    if (m->temp_humi_valid) {
+        snprintf(temp, sizeof temp, "%+.1fC", m->temp_c);
+        snprintf(humidity, sizeof humidity, "%.0f%%", m->rh_pct);
+    } else {
+        snprintf(temp, sizeof temp, "n/a");
+        snprintf(humidity, sizeof humidity, "n/a");
+    }
+    if (m->batt_valid) snprintf(battery, sizeof battery, "%.2fV", m->batt_v);
+    else snprintf(battery, sizeof battery, "n/a");
+    snprintf(buf, sizeof buf, "[tmp] %s   [rh] %s   [bat] %s",
+             temp, humidity, battery);
     u8g2_DrawStr(g, 4, 282, buf);
 
     char tel2[48];

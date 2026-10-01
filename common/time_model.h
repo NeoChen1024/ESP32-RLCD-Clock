@@ -14,13 +14,14 @@
  *   - GPS week/TOW    from unix_s
  *   - civil/UTC/ISO   from unix_ms
  *
- * Offsets are hardcoded for the current era (no leap-second historical table
- * and no automatic update after a future leap second):
- *   TAI = UTC + 37,  GPS = UTC + 18,  TAI = GPS + 19
+ * TAI−UTC is supplied per frame by the platform (a verified
+ * leap-seconds.list table, else the built-in current-era value), and the
+ * local UTC offset comes from a POSIX TZ rule evaluated at unix_ms:
+ *   TAI = UTC + tai_minus_utc_s,  GPS = TAI − 19
  */
 
-#define TAI_MINUS_UTC_SECONDS 37
-#define GPS_MINUS_UTC_SECONDS 18
+#define TAI_MINUS_UTC_BUILTIN_S 37   /* valid since 2017-01-01 */
+#define TAI_MINUS_GPS_SECONDS   19
 #define UNIX_TO_GPS_EPOCH_S   315964800LL
 #define MJD_EPOCH_UNIX_MS     (40587LL * 86400000LL)   /* MJD at the Unix epoch, in ms */
 
@@ -43,11 +44,15 @@ typedef struct {
     float    temp_c;
     float    rh_pct;
     float    batt_v;
+    bool     temp_humi_valid; /* last good SHTC3 sample is within grace period */
+    bool     batt_valid;      /* this frame's ADC read succeeded */
+    int      tz_offset_min;   /* local offset east of UTC at unix_ms */
+    int      tai_minus_utc_s; /* TAI−UTC at unix_ms */
 } clock_model_t;
 
 /* Fill model from the platform's time source + state. Implemented per
- * platform: host = system clock (always trusted/NTP_OK); target = SNTP time
- * + Wi-Fi/sync state. */
+ * platform: host = system clock and local zone (always trusted/NTP_OK);
+ * target = SNTP time, Wi-Fi/sync state, TZ rule and leap table. */
 void time_model_now(clock_model_t *m);
 
 /* ---- Time-scale field extractors (from m->unix_ms) ---- */
@@ -58,17 +63,13 @@ void mjd_tai(const clock_model_t *m, int64_t *day, int64_t *frac_1e7);
 /* GPS week + time-of-week. */
 void gps_week_tow(const clock_model_t *m, int64_t *week, int64_t *tow);
 
-/* Civil fields. tz_offset_min is the local UTC offset in minutes (e.g. +480). */
+/* Civil fields. tz_offset_min is the local UTC offset in minutes (e.g. +480);
+ * pass m->tz_offset_min for local time or 0 for UTC. */
 void civil_fields(const clock_model_t *m, int tz_offset_min,
                   int *year, int *month, int *day, int *weekday,
                   int *hour, int *minute, int *second);
 
 /* ISO week date: year, week (1..53), weekday (1..7, Mon=1). */
 void iso_week_date(const clock_model_t *m, int *iso_year, int *iso_week, int *iso_weekday);
-
-/* Current TZ offset in minutes east of UTC. Implemented per platform:
- * host = system local time; target = selected SD/flash config, then a
- * RAM-only CLI override (default UTC+8 when no usable config exists). */
-int tz_offset_minutes(void);
 
 #endif
