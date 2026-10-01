@@ -18,6 +18,10 @@ const char *storage_root(const char *volume);
 bool storage_lock(unsigned timeout_ms);
 void storage_unlock(void);
 bool storage_mounted_locked(const char *volume);
+/* The one volume whose files are used: "sd" while the SD card is mounted,
+ * otherwise "flash" if mounted, otherwise NULL. The other volume stays
+ * reachable for file management only. */
+const char *storage_active_volume_locked(void);
 /* Increments on every mount, unmount or format of either volume. A holder
  * that releases the mutex mid-operation (long HTTP transfers yield to the
  * audio reader) must abandon open files if this changed meanwhile. */

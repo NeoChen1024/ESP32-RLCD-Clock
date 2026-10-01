@@ -84,15 +84,15 @@ bool wifi_secrets_file_valid(const char *path)
 
 bool wifi_secrets_reload_locked(void)
 {
-    const char *volumes[] = {"sd", "flash"};
+    const char *volume = storage_active_volume_locked();
     wifi_secrets_info_t next = {0};
-    for (unsigned i = 0; i < 2 && !next.found; ++i) {
-        if (!storage_mounted_locked(volumes[i])) continue;
+    if (volume) {
         char path[STORAGE_PATH_MAX];
-        snprintf(path, sizeof path, "%s/%s", storage_root(volumes[i]), STORAGE_WIFI_SECRETS);
-        if (!parse(path, s_networks, &next.count)) continue;
-        next.found = true;
-        snprintf(next.volume, sizeof next.volume, "%s", volumes[i]);
+        snprintf(path, sizeof path, "%s/%s", storage_root(volume), STORAGE_WIFI_SECRETS);
+        if (parse(path, s_networks, &next.count)) {
+            next.found = true;
+            snprintf(next.volume, sizeof next.volume, "%s", volume);
+        }
     }
     wifi_mgr_set_known(s_networks, next.count);
     if (next.found) {

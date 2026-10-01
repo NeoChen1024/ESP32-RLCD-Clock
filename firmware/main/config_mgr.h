@@ -5,8 +5,8 @@
 #include "tz_rule.h"
 
 typedef struct {
-    bool found;
-    char volume[8];
+    bool found;          /* a valid version exists on the active volume */
+    char volume[8];      /* active volume ("" when none is mounted) */
     char path[STORAGE_REL_MAX];
     tz_rule_t tz;   /* "tz" POSIX rule, else legacy tz_offset_minutes, else UTC+8 */
     char ntp_server[64];

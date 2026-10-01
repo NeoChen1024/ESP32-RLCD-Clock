@@ -5,8 +5,7 @@
 /* Managed leap table file, relative to each storage volume root. */
 #define LEAP_MGR_RELATIVE "time/leap-seconds.list"
 
-/* Select the verified table with the latest "#$" update time (SD wins a
- * tie) and install it in the model; with none, revert to the built-in
- * TAI−UTC. Storage owner must already hold the shared mutex. */
+/* Install the active volume's verified table in the model; without one,
+ * revert to the built-in TAI−UTC. Storage owner holds the shared mutex. */
 bool leap_mgr_reload_locked(void);
 #endif

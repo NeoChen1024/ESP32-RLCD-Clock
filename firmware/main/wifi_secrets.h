@@ -9,8 +9,9 @@
  * password is omitted/empty (open network), 8..63 printable ASCII
  * characters, or 64 hex digits. Unknown keys are ignored.
  *
- * The first valid file on SD, then internal flash, is used; the files are
- * never versioned, never served over HTTP and passwords are never logged.
+ * Only the active volume's file is used (storage_active_volume_locked());
+ * it is never versioned, never served over HTTP and passwords are never
+ * logged.
  */
 
 typedef struct {

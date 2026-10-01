@@ -14,7 +14,7 @@ detailed contract document:
 
 Build and usage instructions are in the [README](../README.md). Remaining
 work and agreed scope are in the
-[implementation notes](../rlcd_time_scale_monitor_implementation_notes.md).
+[roadmap](roadmap.md).
 
 ## Shared code
 

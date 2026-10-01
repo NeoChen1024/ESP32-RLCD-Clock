@@ -6,7 +6,8 @@ validation rules are in [storage](storage.md#managed-files).
 
 ## Formats
 
-Sound files live in `sounds/`, at most 64 MiB each. They must be mono or
+Sound files live in `sounds/` on the
+[active volume](storage.md#active-volume), at most 64 MiB each. They must be mono or
 stereo at 8–48 kHz, the ES8311/I²S range used here.
 
 - `.wav`: 16-bit linear PCM (WAVE_FORMAT_PCM, or EXTENSIBLE with the PCM
@@ -68,9 +69,9 @@ returns to the config value.
 
 | Interface | Operations |
 | --- | --- |
-| CLI | `audio play [sd\|flash] "<file>" [loop]`, `audio stop`, `audio volume [0-100\|reset]`, `audio status` |
-| HTTP | `GET /audio`; `POST /audio/play` `{"file", "storage", "loop"}`; `POST /audio/stop`; `POST /audio/volume` `{"level"}` or `{"reset": true}` |
-| Web | Play, Loop and Stop audio in the `/files` file manager |
+| CLI | `audio play "<file>" [loop]`, `audio stop`, `audio volume [0-100\|reset]`, `audio status` |
+| HTTP | `GET /audio`; `POST /audio/play` `{"file", "loop"}`; `POST /audio/stop`; `POST /audio/volume` `{"level"}` or `{"reset": true}` |
+| Web | Play and Loop on sounds of the volume in use, and Stop audio, in the `/files` file manager |
 
 These requests only queue work. A play is answered with 202, and open or
 decode errors then appear in `GET /audio` (`error`). The status reports the

@@ -77,22 +77,21 @@ static bool candidate(const char *path, void *context)
 }
 bool config_mgr_reload_locked(void)
 {
-    const char *volumes[] = {"sd", "flash"};
+    /* Only the active volume counts; there is no fallback to the other. */
+    const char *volume = storage_active_volume_locked();
     config_selection_t next = {.audio_volume = AUDIO_DEFAULT_VOLUME};
     tz_rule_fixed(480, &next.tz);
-    for (unsigned i = 0; i < 2; ++i) {
-        const char *volume = volumes[i];
-        if (!storage_mounted_locked(volume)) continue;
+    if (volume) {
         config_selection_t parsed;
         char selected[STORAGE_REL_MAX];
         int result = storage_config_select(storage_root(volume), candidate, &parsed, selected);
         if (result < 0) ESP_LOGW(TAG, "cannot scan %s config directory", volume);
-        if (result != 1) continue;
-        next = parsed;
-        next.found = true;
+        if (result == 1) {
+            next = parsed;
+            next.found = true;
+            snprintf(next.path, sizeof next.path, "%s", selected);
+        }
         snprintf(next.volume, sizeof next.volume, "%s", volume);
-        snprintf(next.path, sizeof next.path, "%s", selected);
-        break;
     }
     model_tz_set_config(&next.tz);
     audio_mgr_set_config_volume(next.audio_volume);
@@ -101,7 +100,8 @@ bool config_mgr_reload_locked(void)
     if (next.found) ESP_LOGI(TAG, "selected %s/%s (TZ %s, NTP %s)",
                             next.volume, next.path, next.tz.text,
                             next.ntp_server[0] ? next.ntp_server : "DHCP/fallback");
-    else ESP_LOGI(TAG, "no usable config; default TZ and DHCP/fallback NTP");
+    else ESP_LOGI(TAG, "no usable config on %s; default TZ and DHCP/fallback NTP",
+                  volume ? volume : "any volume");
     leap_mgr_reload_locked();
     wifi_secrets_reload_locked();
     return next.found;

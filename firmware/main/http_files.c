@@ -63,6 +63,8 @@ static esp_err_t volumes(httpd_req_t *req)
         cJSON_AddStringToObject(v, "name", names[i]);
         cJSON_AddStringToObject(v, "mount", storage_root(names[i]));
         cJSON_AddBoolToObject(v, "mounted", storage_mounted_locked(names[i]));
+        const char *active = storage_active_volume_locked();
+        cJSON_AddBoolToObject(v, "active", active && !strcmp(active, names[i]));
         uint64_t total, available;
         if (storage_space_locked(names[i], &total, &available)) {
             cJSON_AddNumberToObject(v, "total_bytes", (double)total);
@@ -77,6 +79,8 @@ static esp_err_t active_config(httpd_req_t *req)
     config_selection_t active;
     config_mgr_current_locked(&active);
     cJSON *j = cJSON_CreateObject();
+    if (active.volume[0]) cJSON_AddStringToObject(j, "active_volume", active.volume);
+    else cJSON_AddNullToObject(j, "active_volume");
     cJSON_AddBoolToObject(j, "found", active.found);
     if (active.found) {
         cJSON_AddStringToObject(j, "volume", active.volume);
@@ -220,59 +224,24 @@ static esp_err_t download(httpd_req_t *req, const char *path, const char *relati
     if (result == ESP_OK) result = httpd_resp_send_chunk(req, NULL, 0);
     return result;
 }
-static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, const char *relative)
+/* Shared tail of upload and copy: the staged file is closed and fsynced
+ * (ok) or failed with fail_status/fail_text. Validate, release a playing
+ * file, commit through the journal and reload what changed. */
+static esp_err_t commit_staged(httpd_req_t *req, const char *volume, const char *root,
+                               const char *relative, bool ok, const char *fail_status,
+                               const char *fail_text)
 {
-    if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding")) return error(req, "400 Bad Request", "use a Content-Length upload");
-    if (!req->content_len || req->content_len > storage_file_limit(relative))
-        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV/FLAC limit 64 MiB; empty files rejected");
-    uint64_t total, available;
-    if (!storage_space_locked(volume, &total, &available)) return error(req, "503 Service Unavailable", "cannot query storage");
-    if (available < req->content_len + 65536ULL) return error(req, "507 Insufficient Storage", "need room for complete temporary upload and metadata");
-    if (!strncmp(relative, "config/", 7)) {
-        char destination[STORAGE_PATH_MAX];
-        snprintf(destination, sizeof destination, "%s/%s", root, relative);
-        struct stat existing;
-        if (!stat(destination, &existing)) return error(req, "409 Conflict", "config versions cannot be overwritten");
-        if (errno != ENOENT) return error(req, "500 Internal Server Error", "cannot check config version");
+    char staged[STORAGE_PATH_MAX];
+    snprintf(staged, sizeof staged, "%s/.rlcd-txn/upload", root);
+    if (ok && !strncmp(relative, "config/", 7) && !config_mgr_file_valid(staged)) {
+        ok = false; fail_status = "422 Unprocessable Content";
+        fail_text = "invalid config: tz must be a POSIX TZ rule, tz_offset_minutes -840..840, "
+                    "audio_volume 0..100, ntp_server a hostname or omitted";
     }
-    int fd = storage_txn_begin(root, relative);
-    if (fd < 0) return error(req, "500 Internal Server Error", "cannot begin upload transaction");
-    char buffer[4096];
-    size_t remaining = req->content_len;
-    bool ok = true;
-    const char *fail_status = "500 Internal Server Error", *fail_text = "write failed";
-    int64_t deadline = esp_timer_get_time() + transfer_budget_us(req->content_len);
-    while (remaining && ok) {
-        if (esp_timer_get_time() >= deadline) { ok = false; fail_status = "408 Request Timeout"; fail_text = "upload deadline exceeded"; break; }
-        int n = httpd_req_recv(req, buffer, remaining < sizeof buffer ? remaining : sizeof buffer);
-        if (n <= 0) { ok = false; fail_status = "408 Request Timeout"; fail_text = "upload interrupted"; break; }
-        ok = write(fd, buffer, n) == n;
-        remaining -= n;
-        if (ok && !yield_storage()) {
-            /* The volume changed under us: the staged upload is gone or stale. */
-            close(fd);
-            return error(req, "503 Service Unavailable", "storage changed during upload; retry");
-        }
-    }
-    if (ok) ok = fsync(fd) == 0;
-    if (close(fd)) ok = false;
-    if (ok && !strncmp(relative, "config/", 7)) {
-        char staged[STORAGE_PATH_MAX];
-        snprintf(staged, sizeof staged, "%s/.rlcd-txn/upload", root);
-        if (!config_mgr_file_valid(staged)) {
-            ok = false; fail_status = "422 Unprocessable Content";
-            fail_text = "invalid config: tz must be a POSIX TZ rule, tz_offset_minutes -840..840, "
-                        "audio_volume 0..100, ntp_server a hostname or omitted";
-        }
-    }
-    if (ok && !strncmp(relative, "secrets/", 8)) {
-        char staged[STORAGE_PATH_MAX];
-        snprintf(staged, sizeof staged, "%s/.rlcd-txn/upload", root);
-        if (!wifi_secrets_file_valid(staged)) {
-            ok = false; fail_status = "422 Unprocessable Content";
-            fail_text = "invalid wifi.json: networks must list up to 8 unique SSIDs (1-32 bytes); "
-                        "password omitted, 8-63 printable ASCII or 64 hex digits";
-        }
+    if (ok && !strncmp(relative, "secrets/", 8) && !wifi_secrets_file_valid(staged)) {
+        ok = false; fail_status = "422 Unprocessable Content";
+        fail_text = "invalid wifi.json: networks must list up to 8 unique SSIDs (1-32 bytes); "
+                    "password omitted, 8-63 printable ASCII or 64 hex digits";
     }
     if (ok) audio_mgr_release_locked(volume, relative);   /* never replace a file being played */
     if (ok && storage_txn_commit(root)) {
@@ -295,6 +264,112 @@ static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, 
     if (!strncmp(relative, "time/", 5)) leap_mgr_reload_locked();
     if (!strncmp(relative, "secrets/", 8)) wifi_secrets_reload_locked();
     return success(req);
+}
+
+/* Checks shared by upload and copy before anything is staged. */
+static esp_err_t check_destination(httpd_req_t *req, const char *volume, const char *root,
+                                   const char *relative, uint64_t bytes)
+{
+    if (!bytes || bytes > storage_file_limit(relative))
+        return error(req, "413 Content Too Large", "JSON and leap table limit 16 KiB; WAV/FLAC limit 64 MiB; empty files rejected");
+    uint64_t total, available;
+    if (!storage_space_locked(volume, &total, &available)) return error(req, "503 Service Unavailable", "cannot query storage");
+    if (available < bytes + 65536ULL) return error(req, "507 Insufficient Storage", "need room for complete temporary upload and metadata");
+    if (!strncmp(relative, "config/", 7)) {
+        char destination[STORAGE_PATH_MAX];
+        snprintf(destination, sizeof destination, "%s/%s", root, relative);
+        struct stat existing;
+        if (!stat(destination, &existing)) return error(req, "409 Conflict", "config versions cannot be overwritten");
+        if (errno != ENOENT) return error(req, "500 Internal Server Error", "cannot check config version");
+    }
+    return ESP_OK;
+}
+
+static esp_err_t upload(httpd_req_t *req, const char *volume, const char *root, const char *relative)
+{
+    if (httpd_req_get_hdr_value_len(req, "Transfer-Encoding")) return error(req, "400 Bad Request", "use a Content-Length upload");
+    esp_err_t checked = check_destination(req, volume, root, relative, req->content_len);
+    if (checked != ESP_OK) return checked;
+    int fd = storage_txn_begin(root, relative);
+    if (fd < 0) return error(req, "500 Internal Server Error", "cannot begin upload transaction");
+    char buffer[4096];
+    size_t remaining = req->content_len;
+    bool ok = true;
+    const char *fail_status = "500 Internal Server Error", *fail_text = "write failed";
+    int64_t deadline = esp_timer_get_time() + transfer_budget_us(req->content_len);
+    while (remaining && ok) {
+        if (esp_timer_get_time() >= deadline) { ok = false; fail_status = "408 Request Timeout"; fail_text = "upload deadline exceeded"; break; }
+        int n = httpd_req_recv(req, buffer, remaining < sizeof buffer ? remaining : sizeof buffer);
+        if (n <= 0) { ok = false; fail_status = "408 Request Timeout"; fail_text = "upload interrupted"; break; }
+        ok = write(fd, buffer, n) == n;
+        remaining -= n;
+        if (ok && !yield_storage()) {
+            /* The volume changed under us: the staged upload is gone or stale. */
+            close(fd);
+            return error(req, "503 Service Unavailable", "storage changed during upload; retry");
+        }
+    }
+    if (ok) ok = fsync(fd) == 0;
+    if (close(fd)) ok = false;
+    return commit_staged(req, volume, root, relative, ok, fail_status, fail_text);
+}
+
+/* POST /fs/copy {"from": "sd"|"flash", "to": "flash"|"sd", "path": "<managed file>"}:
+ * copy one managed file to the other volume with the same validation and
+ * replacement rules as an upload (config versions are never overwritten). */
+static esp_err_t copy(httpd_req_t *req)
+{
+    char body[256];
+    if (!req->content_len || req->content_len >= sizeof body) return error(req, "400 Bad Request", "expected a small JSON body");
+    size_t got = 0;
+    while (got < req->content_len) {
+        int n = httpd_req_recv(req, body + got, req->content_len - got);
+        if (n <= 0) return error(req, "408 Request Timeout", "request body interrupted");
+        got += (size_t)n;
+    }
+    cJSON *json = cJSON_ParseWithLength(body, got);
+    cJSON *from = cJSON_GetObjectItemCaseSensitive(json, "from"), *to = cJSON_GetObjectItemCaseSensitive(json, "to");
+    cJSON *path = cJSON_GetObjectItemCaseSensitive(json, "path");
+    char src[8] = "", dst[8] = "", relative[STORAGE_REL_MAX] = "";
+    if (cJSON_IsString(from) && cJSON_IsString(to) && cJSON_IsString(path) &&
+        strlen(from->valuestring) < sizeof src && strlen(to->valuestring) < sizeof dst &&
+        strlen(path->valuestring) < sizeof relative) {
+        strcpy(src, from->valuestring); strcpy(dst, to->valuestring); strcpy(relative, path->valuestring);
+    }
+    cJSON_Delete(json);
+    if ((strcmp(src, "sd") && strcmp(src, "flash")) || (strcmp(dst, "sd") && strcmp(dst, "flash")) ||
+        !strcmp(src, dst) || !storage_file_allowed(relative))
+        return error(req, "400 Bad Request", "need from/to as sd|flash (different) and a managed file path");
+    if (!storage_mounted_locked(src) || !storage_mounted_locked(dst)) return error(req, "503 Service Unavailable", "both volumes must be mounted");
+    const char *src_root = storage_root(src), *dst_root = storage_root(dst);
+    char source[STORAGE_PATH_MAX];
+    snprintf(source, sizeof source, "%s/%s", src_root, relative);
+    FILE *in = fopen(source, "rb");
+    struct stat st;
+    if (!in || fstat(fileno(in), &st) || !S_ISREG(st.st_mode)) {
+        if (in) fclose(in);
+        return error(req, "404 Not Found", "source file unavailable");
+    }
+    esp_err_t checked = check_destination(req, dst, dst_root, relative, (uint64_t)st.st_size);
+    if (checked != ESP_OK) { fclose(in); return checked; }
+    int fd = storage_txn_begin(dst_root, relative);
+    if (fd < 0) { fclose(in); return error(req, "500 Internal Server Error", "cannot begin copy transaction"); }
+    char buffer[4096];
+    size_t n;
+    bool ok = true;
+    int64_t deadline = esp_timer_get_time() + transfer_budget_us((uint64_t)st.st_size);
+    while (ok && (n = fread(buffer, 1, sizeof buffer, in)) > 0) {
+        ok = write(fd, buffer, n) == (ssize_t)n && esp_timer_get_time() < deadline;
+        if (ok && !yield_storage()) {
+            close(fd); fclose(in);
+            return error(req, "503 Service Unavailable", "storage changed during copy; retry");
+        }
+    }
+    if (ferror(in)) ok = false;
+    if (fclose(in)) ok = false;
+    if (ok) ok = fsync(fd) == 0;
+    if (close(fd)) ok = false;
+    return commit_staged(req, dst, dst_root, relative, ok, "500 Internal Server Error", "copy failed");
 }
 static void cleanup_visit(const char *relative, void *context)
 {
@@ -333,7 +408,11 @@ static esp_err_t perform(httpd_req_t *req)
         if (req->method != HTTP_GET && req->method != HTTP_POST) return error(req, "405 Method Not Allowed", "use GET to preview or POST to clean up");
         return cleanup(req, volume);
     }
-    if (req->method == HTTP_POST) return error(req, "405 Method Not Allowed", "POST is only used for cleanup");
+    if (!strcmp(req->uri, "/fs/copy")) {
+        if (req->method != HTTP_POST) return error(req, "405 Method Not Allowed", "use POST to copy");
+        return copy(req);
+    }
+    if (req->method == HTTP_POST) return error(req, "405 Method Not Allowed", "POST is only used for cleanup and copy");
     char volume[8], relative[STORAGE_REL_MAX];
     if (!storage_parse_uri(req->uri, volume, relative)) return error(req, "400 Bad Request", "invalid managed file path");
     if (!storage_mounted_locked(volume)) return error(req, "503 Service Unavailable", "volume is not mounted");

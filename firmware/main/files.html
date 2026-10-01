@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RLCD File Manager</title><link rel="stylesheet" href="/web_style.css"></head><body><main>
 <header><div><div class="brand">RLCD TIME SCALE MONITOR</div><h1>Configuration &amp; sounds</h1></div><nav aria-label="Main navigation"><a href="/">Display</a><a href="/files" aria-current="page">Files</a></nav></header>
-<p class="muted">Keep dated configuration versions, Wi-Fi networks and alarm sounds. The device selects the newest valid JSON from SD first, then internal flash. Alarm playback is not yet implemented.</p>
+<p class="muted">Keep dated configuration versions, Wi-Fi networks and sounds. The device uses only one volume: the SD card while it is mounted, otherwise internal flash. The other volume can still be managed, and “Send to” copies a file across.</p>
 <section>
   <div class="toolbar"><label for="volume">Storage</label><select id="volume" aria-label="Storage volume"></select><button id="refresh">Refresh</button></div>
   <p id="space" class="muted">Loading storage…</p><p id="active" class="muted">Checking selected configuration…</p>
@@ -23,7 +23,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const labels = {flash:'Internal Flash', sd:'SD Card'};
-let folder = '', busy = false, selected = [], editVolume = '', sequence = 0;
+let folder = '', busy = false, selected = [], editVolume = '', sequence = 0, activeVolume = '', mounted = {};
 const bytes = n => n === undefined ? 'unknown' : n < 1024 ? n+' B' : n < 1048576 ? (n/1024).toFixed(1)+' KiB' : n < 1073741824 ? (n/1048576).toFixed(1)+' MiB' : (n/1073741824).toFixed(2)+' GiB';
 function url(path='',volume=$('volume').value){return '/fs/'+volume+'/'+path.split('/').map(encodeURIComponent).join('/')}
 function message(text,bad=false){$('message').textContent=text;$('message').classList.toggle('bad',bad)}
@@ -39,21 +39,24 @@ function busyState(value){
 }
 async function activeConfig(){
   const state=await(await api('/fs/active')).json();
-  $('active').textContent=state.found?'Selected on this device: '+labels[state.volume]+' /'+state.path+' · TZ '+state.tz+' · NTP '+(state.ntp_server||'DHCP/fallback')+' · Volume '+state.audio_volume:'Selected on this device: none (TZ '+state.tz+', DHCP/fallback)';
+  $('active').textContent='In use: '+(state.active_volume?labels[state.active_volume]:'no volume')+' · Config '+(state.found?'/'+state.path:'defaults')+' · TZ '+state.tz+' · NTP '+(state.ntp_server||'DHCP/fallback')+' · Volume '+state.audio_volume;
   const wifi=state.wifi_secrets;
-  $('active').textContent+=' · Wi-Fi '+(wifi.volume?wifi.networks+' known network'+(wifi.networks===1?'':'s')+' from '+labels[wifi.volume]:'no secrets/wifi.json');
-  $('active').textContent+=' · Leap table '+(state.leap.volume==='builtin'?'built-in':labels[state.leap.volume]+', expires '+new Date(state.leap.expires_unix*1000).toISOString().slice(0,10));
+  $('active').textContent+=' · Wi-Fi '+(wifi.volume?wifi.networks+' known network'+(wifi.networks===1?'':'s'):'no secrets/wifi.json');
+  $('active').textContent+=' · Leap table '+(state.leap.volume==='builtin'?'built-in':'expires '+new Date(state.leap.expires_unix*1000).toISOString().slice(0,10));
   return state;
 }
 async function volumes(){
   const data=await(await api('/fs/')).json(), old=$('volume').value;
   $('volume').replaceChildren();
+  activeVolume='';mounted={};
   for(const v of data.volumes){
     const option=document.createElement('option');option.value=v.name;
-    option.textContent=(labels[v.name]||v.name)+(v.mounted?'':' (not mounted)');
+    if(v.active)activeVolume=v.name;
+    mounted[v.name]=v.mounted;
+    option.textContent=(labels[v.name]||v.name)+(v.active?' (in use)':v.mounted?' (inactive)':' (not mounted)');
     option.disabled=!v.mounted;$('volume').append(option);
   }
-  const active=data.volumes.find(v=>v.name===old&&v.mounted)||data.volumes.find(v=>v.mounted);
+  const active=data.volumes.find(v=>v.name===old&&v.mounted)||data.volumes.find(v=>v.active)||data.volumes.find(v=>v.mounted);
   if(active){$('volume').value=active.name;$('space').textContent='Available '+bytes(active.free_bytes)+' / '+bytes(active.total_bytes)+' · '+active.mount}
   else $('space').textContent='No mounted storage. Mount SD or initialize internal flash from the serial console.';
   await activeConfig();
@@ -77,10 +80,13 @@ async function list(){
       if(folder==='secrets/'){const note=document.createElement('span');note.className='muted';note.textContent='Write-only';actions.append(note)}
       else{const link=document.createElement('a');link.href=url(path);link.textContent='Download';link.download=entry.name;actions.append(link)}
       if(folder==='config/') actions.append(button('Edit as new version',()=>edit(path)));
-      if(folder==='sounds/'){
+      /* Playback always reads the volume in use. */
+      if(folder==='sounds/'&&$('volume').value===activeVolume){
         actions.append(button('Play',()=>play(path,false)));
         actions.append(button('Loop',()=>play(path,true)));
       }
+      const other=$('volume').value==='sd'?'flash':'sd';
+      if(mounted[other])actions.append(button('Send to '+labels[other],()=>send(path,$('volume').value,other)));
       actions.append(button('Delete',async()=>{
         if(busy||!confirm('Delete '+labels[$('volume').value]+' /'+path+'?'))return;
         await api(url(path),{method:'DELETE'});message('Deleted '+path);await refresh();
@@ -148,9 +154,17 @@ $('save').onclick=async()=>{
 };
 $('cancel').onclick=()=>$('editor').close();
 async function play(path,loop){
-  const r=await api('/audio/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({storage:$('volume').value,file:path,loop})});
+  const r=await api('/audio/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:path,loop})});
   await r.json();message((loop?'Looping ':'Playing ')+path+(loop?' (stops after 10 minutes)':''));
   setTimeout(()=>api('/audio').then(r=>r.json()).then(a=>{if(a.error)message('Audio: '+a.error,true)}).catch(()=>{}),1500);
+}
+async function send(path,from,to){
+  if(busy)return;busyState(true);
+  try{
+    message('Copying '+path+' to '+labels[to]+'…');
+    await api('/fs/copy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from,to,path})});
+    message('Copied '+path+' to '+labels[to]+(to===activeVolume?' (in use; settings reloaded)':'')+'.');
+  }catch(e){message(e.message,true)}finally{busyState(false)}
 }
 $('stopaudio').onclick=()=>api('/audio/stop',{method:'POST'}).then(()=>message('Audio stopped.')).catch(e=>message(e.message,true));
 let cleanupVolume='';

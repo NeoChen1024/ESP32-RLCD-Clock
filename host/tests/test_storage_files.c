@@ -9,7 +9,9 @@
 #include <unistd.h>
 #include "cJSON.h"
 
-static char root[] = "/tmp/rlcd-fs-XXXXXX";
+/* Relative to the test working directory (host/build): writable under
+ * sandboxes, and short enough for the 24-character storage root limit. */
+static char root[] = "./rlcd-fs-XXXXXX";
 static const char *version = "config/20260923T010000000Z.json";
 static void path(char out[256], const char *name) { snprintf(out, 256, "%s/%s", root, name); }
 static void write_file(const char *name, const char *data)

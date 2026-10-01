@@ -2,7 +2,7 @@
 
 This is the board and media reference for the Waveshare ESP32-S3 RLCD 4.2.
 The firmware design and current progress remain in
-[the implementation notes](../rlcd_time_scale_monitor_implementation_notes.md).
+[the roadmap](roadmap.md).
 See also the [local schematic](ESP32-S3-RLCD-4.2-schematic.pdf). Firmware
 data flow is covered in [architecture](architecture.md) and storage partitioning in [storage](storage.md).
 

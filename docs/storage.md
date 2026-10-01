@@ -18,6 +18,31 @@ and PHY are retained.
 
 Ordinary mounts never format either volume.
 
+## Active volume
+
+The device uses exactly one volume for its own files:
+
+- **SD:** while the SD card is mounted with a readable FAT, SD is the
+  active volume, and internal flash is ignored entirely.
+- **Flash:** if SD is absent or fails to mount, internal flash is the active
+  volume.
+- **Neither:** with no volume mounted, defaults apply.
+
+The active volume supplies config, the leap table, `secrets/wifi.json`,
+events and sounds. Nothing is merged or looked up on the other volume, so a
+blank SD card means default settings and no known Wi-Fi networks until
+files are copied onto it.
+
+The choice is made at boot and again whenever `sd mount`, `sd unmount`,
+`sd format` or `flash init` changes what is mounted. Each change reloads
+everything, and a file playing from the previous volume is released first.
+A read error after a successful mount does not switch volumes. There is no
+hotplug detection.
+
+The inactive volume stays mounted and fully manageable through the file API,
+the CLI and the web page. `POST /fs/copy` (the web "Send to" button) copies
+a file between the volumes.
+
 ## Ownership
 
 One storage mutex covers all file access and mount changes: the HTTP
@@ -38,13 +63,13 @@ audio reader.
 Only these paths are reachable through the API. Names use ASCII letters,
 digits, space, `_`, `-` and `.`, and paths are case-sensitive.
 
-| Path | Content | Size | Replacement | Selection |
+| Path | Content | Size | Replacement | Use on the active volume |
 | --- | --- | --- | --- | --- |
-| `config/<name>.json` | JSON object, nesting ≤ 16 | 16 KiB | New file per version; no overwrite (409) | Newest valid name, SD before flash |
+| `config/<name>.json` | JSON object, nesting ≤ 16 | 16 KiB | New file per version; no overwrite (409) | Newest valid version |
 | `sounds/<name>.wav` / `.flac` | Decodable audio ([formats](audio.md#formats)) | 64 MiB | In place | Named by the player |
-| `time/leap-seconds.list` | IERS table with a valid SHA-1 line | 16 KiB | In place | Latest `#$` update, SD wins ties |
-| `secrets/wifi.json` | Known networks ([schema](network.md#known-networks)) | 16 KiB | In place; write-only over HTTP | First valid: SD, then flash |
-| `events/<name>.json` | Planned ([events](events.md)) | — | In place | SD if it has `events/`, else flash |
+| `time/leap-seconds.list` | IERS table with a valid SHA-1 line | 16 KiB | In place | If it verifies |
+| `secrets/wifi.json` | Known networks ([schema](network.md#known-networks)) | 16 KiB | In place; write-only over HTTP | If it is valid |
+| `events/<name>.json` | Planned ([events](events.md)) | — | In place | All valid files |
 
 Every upload is validated before it replaces anything. A failure returns
 422 with a reason. Uploads, deletes, explicit reloads and mount changes
@@ -52,11 +77,10 @@ reload the affected selection.
 
 ## Configuration versions
 
-Config file names are compared bytewise in descending order. The first
-readable, valid SD version wins; only if SD has none is flash searched the
-same way. If neither has one, defaults apply. SD takes priority even when a
-flash name sorts later. The web editor saves a new UTC-timestamped version
-and keeps older ones.
+On the active volume, config file names are compared bytewise in descending
+order, and the first readable, valid version is used. If there is none,
+defaults apply. A valid version on the inactive volume is never used. The
+web editor saves a new UTC-timestamped version and keeps older ones.
 
 | Key | Meaning |
 | --- | --- |
@@ -93,8 +117,15 @@ modify `.rlcd-txn`.
 
 ## HTTP file API
 
-- `GET /fs/` lists volumes with their free space. `GET /fs/active` reports
-  the selected config, the Wi-Fi secrets source and the leap table.
+- `GET /fs/` lists volumes with their free space and which one is active.
+  `GET /fs/active` reports the active volume, the selected config, and
+  whether Wi-Fi secrets and a leap table are in use.
+- `POST /fs/copy` with `{"from": "sd", "to": "flash", "path": "<managed file>"}`
+  copies one file to the other volume. It follows the same validation and
+  replacement rules as an upload: config versions are never overwritten,
+  and anything else is replaced through the journal. Copying onto the
+  active volume reloads the affected settings. `secrets/wifi.json` can be
+  copied this way without ever being readable over HTTP.
 - `GET /fs/<volume>/<dir>/` lists a directory as JSON, at most 256 entries
   (the newest names). The `secrets/` listing shows names and sizes only.
 - `GET`, `PUT` and `DELETE /fs/<volume>/<path>` work on files. A GET under

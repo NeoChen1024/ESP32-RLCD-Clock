@@ -270,20 +270,19 @@ static int cmd_leap(int argc, char **argv)
     return 0;
 }
 
-/* ---- audio play [sd|flash] <file> | stop | volume [0-100] | status ---- */
+/* ---- audio play <file> [loop] | stop | volume [0-100|reset] | status ---- */
 static int cmd_audio(int argc, char **argv)
 {
     const char *op = argc > 1 ? argv[1] : "status";
     bool loop = argc >= 4 && !strcmp(argv[argc - 1], "loop");
     int args = argc - (loop ? 1 : 0);   /* trailing `loop` is a flag */
-    if (!strcmp(op, "play") && (args == 3 || args == 4)) {
-        const char *volume = args == 4 ? argv[2] : "sd";
-        const char *name = argv[args - 1];
+    if (!strcmp(op, "play") && args == 3) {
+        const char *name = argv[2];
         char relative[STORAGE_REL_MAX];
         /* Accept a bare file name or the managed sounds/ path. */
         snprintf(relative, sizeof relative, "%s%s", strncmp(name, "sounds/", 7) ? "sounds/" : "", name);
-        if (!audio_mgr_play(volume, relative, loop)) { printf("cannot play %s/%s\n", volume, relative); return 1; }
-        printf("queued %s/%s%s\n", volume, relative, loop ? " (loop, 10 min limit)" : "");
+        if (!audio_mgr_play(relative, loop)) { printf("cannot play %s\n", relative); return 1; }
+        printf("queued %s from the active volume%s\n", relative, loop ? " (loop, 10 min limit)" : "");
         return 0;
     }
     if (!strcmp(op, "stop") && argc == 2) { audio_mgr_stop(); printf("stopped\n"); return 0; }
@@ -318,7 +317,7 @@ static int cmd_audio(int argc, char **argv)
         if (st.last_error[0]) printf("last error: %s\n", st.last_error);
         return 0;
     }
-    printf("usage: audio play [sd|flash] <file> [loop] | stop | volume [0-100|reset] | status\n");
+    printf("usage: audio play <file> [loop] | stop | volume [0-100|reset] | status\n");
     return 1;
 }
 
@@ -393,8 +392,8 @@ static int cmd_config(int argc, char **argv)
     config_selection_t st;
     config_mgr_current_locked(&st);
     storage_unlock();
-    printf("selected: %s\n", st.found ? st.volume : "none");
-    if (st.found) printf("file:     %s\n", st.path);
+    printf("active volume: %s\n", st.volume[0] ? st.volume : "none mounted");
+    printf("selected: %s\n", st.found ? st.path : "none (defaults)");
     tz_rule_t effective;
     model_tz_get(&effective, NULL);
     printf("config TZ: %s\neffective TZ: %s\nconfig NTP: %s\nconfig audio volume: %d\n",
@@ -445,8 +444,8 @@ static void register_cmds(void)
         { .command = "leap", .help = "TAI-UTC table from time/leap-seconds.list: status | reload",
           .hint = "[status] | reload",
           .func = cmd_leap },
-        { .command = "audio", .help = "WAV/FLAC playback: play [sd|flash] <sounds file> [loop] | stop | volume [0-100|reset] | status",
-          .hint = "play [sd|flash] \"<file>\" [loop] | stop | volume [0-100|reset] | status",
+        { .command = "audio", .help = "WAV/FLAC playback from the active volume: play <sounds file> [loop] | stop | volume [0-100|reset] | status",
+          .hint = "play \"<file>\" [loop] | stop | volume [0-100|reset] | status",
           .func = cmd_audio },
         { .command = "sensor", .help = "read SHTC3 temp/humidity and battery voltage",
           .func = cmd_sensor },

@@ -11,13 +11,16 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static char sd[] = "/tmp/cfg-sd-XXXXXX", flash[] = "/tmp/cfg-f-XXXXXX";
+/* Relative to the test working directory (host/build), which sandboxes
+ * leave writable, unlike /tmp. */
+static char sd[] = "./cfg-sd-XXXXXX", flash[] = "./cfg-f-XXXXXX";
 static bool sd_mounted = true, flash_mounted = true;
 static char effective_tz[TZ_RULE_TEXT_MAX];
 static unsigned leap_reloads;
 static char effective_ntp[64];
 const char *storage_root(const char *v) { return !strcmp(v,"sd") ? sd : flash; }
 bool storage_mounted_locked(const char *v) { return !strcmp(v,"sd") ? sd_mounted : flash_mounted; }
+const char *storage_active_volume_locked(void) { return sd_mounted ? "sd" : flash_mounted ? "flash" : NULL; }
 bool storage_lock(unsigned ms) { (void)ms; return true; }
 void storage_unlock(void) {}
 void model_tz_set_config(const tz_rule_t *rule) { snprintf(effective_tz,sizeof effective_tz,"%s",rule?rule->text:MODEL_TZ_DEFAULT); }
@@ -88,13 +91,14 @@ int main(void)
     assert(!strcmp(kept,"config/20260923T090000000Z.json"));
     put(flash,"20260923T085000000Z.json","{\"tz\":\"bad\"}");
     snprintf(dir,sizeof dir,"%s/config/20260923T090000000Z.json",flash);
-    assert(!rename(dir,"/tmp/rlcd-cfg-aside.json"));
+    char aside[200]; snprintf(aside,sizeof aside,"%s/aside.json",sd);
+    assert(!rename(dir,aside));
     assert(config_mgr_cleanup_locked("flash",true,kept,NULL,NULL)==CONFIG_CLEANUP_NO_VALID && !kept[0]);
     snprintf(dir,sizeof dir,"%s/config/20260923T085000000Z.json",flash);
     assert(!access(dir,F_OK)); /* untouched without a valid version */
     assert(!unlink(dir));
     snprintf(dir,sizeof dir,"%s/config/20260923T090000000Z.json",flash);
-    assert(!rename("/tmp/rlcd-cfg-aside.json",dir));
+    assert(!rename(aside,dir));
     sd_mounted=false;
     assert(config_mgr_cleanup_locked("sd",false,kept,NULL,NULL)==CONFIG_CLEANUP_UNMOUNTED);
     assert(config_mgr_reload());
@@ -105,8 +109,14 @@ int main(void)
     assert(!current.found && !strcmp(effective_tz,MODEL_TZ_DEFAULT) && !effective_ntp[0]);
     const char *sdnames[]={"20260923T130000000Z.json","20260923T140000000Z.json","20260923T150000000Z.json","20260923T160000000Z.json"};
     for(unsigned i=0;i<4;++i){snprintf(dir,sizeof dir,"%s/config/%s",sd,sdnames[i]);assert(!unlink(dir));}
+    /* A mounted SD without a valid version means defaults: the valid flash
+     * version is never used while SD is the active volume. */
+    sd_mounted=flash_mounted=true;
+    assert(!config_mgr_reload());
+    config_mgr_current_locked(&current);
+    assert(!current.found && !strcmp(current.volume,"sd") && !strcmp(effective_tz,MODEL_TZ_DEFAULT));
     snprintf(dir,sizeof dir,"%s/config",sd);assert(!rmdir(dir));assert(!rmdir(sd));
     snprintf(dir,sizeof dir,"%s/config/20260923T090000000Z.json",flash);assert(!unlink(dir));
     snprintf(dir,sizeof dir,"%s/config",flash);assert(!rmdir(dir));assert(!rmdir(flash));
-    puts("SD priority, newest valid config, POSIX tz rules, fallback, flash and cleanup OK");
+    puts("active volume only, newest valid config, POSIX tz rules, fallback versions, flash and cleanup OK");
 }

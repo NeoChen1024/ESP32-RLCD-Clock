@@ -17,8 +17,7 @@ primary home:
 - `docs/network.md`: Wi-Fi modes, known-network secrets, HTTP endpoints.
 - `docs/events.md`: agreed event/alarm scheduling design until implemented.
 - `docs/hardware_notes.md`: board wiring, panel behavior and power boundary.
-- `rlcd_time_scale_monitor_implementation_notes.md`: remaining work and
-  explicitly agreed scope.
+- `docs/roadmap.md`: remaining work and explicitly agreed scope.
 - This file: local build/bring-up steps and invariants agents must preserve.
 
 Link to these homes instead of duplicating them. Keep completed milestones
@@ -84,8 +83,10 @@ host/build/rlcd_host --png out.png  # headless; also --pbm / --bmp
   CLI, selected config, DHCP option 42, then pool fallback. DHCP addresses
   are captured independently of the active SNTP table using the linker
   `--wrap=dhcp_set_ntp_servers`; SNTP operations run on tcpip_thread.
-- Config files are selected by descending filename, SD before internal
-  flash. The HTTP API does not overwrite an existing config version. The
+- Only the active volume (SD while mounted, else internal flash) supplies
+  config, leap table, Wi-Fi secrets, events and sounds; never fall back to
+  or merge the other volume. Config is the newest valid filename there. The
+  HTTP API and `/fs/copy` never overwrite an existing config version. The
   private `.rlcd-txn` journal is recovered under the storage lock; ordinary
   mounts must never auto-format either volume.
 - Time state is INVALID, TRUSTED or RTC_HOLD (`common/clock_health`). It is

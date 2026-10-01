@@ -50,11 +50,12 @@ are never logged.
   characters, or 64 hex digits.
 - Unknown keys are ignored.
 
-The first valid file on SD, then flash, is used; the lists are not merged.
+Only the [active volume](storage.md#active-volume)'s file is used.
 Over HTTP the file is write-only (see [storage](storage.md#http-file-api)).
 It is still plaintext on FAT, so anyone with serial access or the SD card
 can read it. `wifi.json.example` is a valid starting point, and real
-`wifi.json` files are git-ignored.
+`wifi.json` files are git-ignored. To carry the networks to a new SD card,
+use `POST /fs/copy` or the web "Send to" button.
 
 ## HTTP endpoints
 

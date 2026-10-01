@@ -42,10 +42,11 @@ bool audio_mgr_start(void);
  * longer than the limit (which then plays exactly once), is not cut. */
 #define AUDIO_LOOP_LIMIT_MS (10U * 60U * 1000U)
 
-/* Queue playback of a managed sounds/<name>.wav or .flac file; replaces any current one.
- * Returns false if the request is malformed or the queue is full; open
- * and format errors are reported through last_error. */
-bool audio_mgr_play(const char *volume, const char *relative, bool loop);
+/* Queue playback of a managed sounds/<name>.wav or .flac file from the
+ * active storage volume; replaces any current one. Returns false if the
+ * request is malformed or the queue is full; open and format errors are
+ * reported through last_error. */
+bool audio_mgr_play(const char *relative, bool loop);
 void audio_mgr_stop(void);
 /* Volume 0..100: 0 mutes, 1..100 map linearly to -40..0 dB before the
  * PA-gain compensation. The config value applies unless a RAM-only CLI

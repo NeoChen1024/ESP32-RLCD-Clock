@@ -98,7 +98,7 @@ clock-step scheduling, firmware Wi-Fi/SNTP managers with a fake IDF transport
 validation and the repository example files,
 sensor sample expiry/recovery, masking invalid telemetry and untrusted time,
 and file-path/content validation with
-interrupted FAT replacement recovery. They also test SD-first config version
+interrupted FAT replacement recovery. They also test active-volume config version
 selection and fallback to internal flash/defaults, config cleanup, plus RTC calendar decoding
 the 24-hour boot trust limit, the INVALID/TRUSTED/RTC_HOLD time state with
 its build-time window and RTC drift tolerance, and rejection of implausible

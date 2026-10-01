@@ -35,7 +35,7 @@ static const char *TAG = "audio";
 #define WRITE_CHUNK  4096
 
 typedef enum { CMD_PLAY, CMD_STOP } cmd_op_t;
-typedef struct { cmd_op_t op; bool loop; char volume[8]; char relative[STORAGE_REL_MAX]; } cmd_t;
+typedef struct { cmd_op_t op; bool loop; char relative[STORAGE_REL_MAX]; } cmd_t;
 
 static esp_codec_dev_handle_t s_dev;
 static QueueHandle_t s_cmd;
@@ -173,12 +173,14 @@ static audio_source_t s_src;
 static bool open_file(const cmd_t *c)
 {
     char path[STORAGE_PATH_MAX];
-    snprintf(path, sizeof path, "%s/%s", storage_root(c->volume), c->relative);
     if (!storage_lock(5000)) { set_error("storage busy"); return false; }
+    /* Sounds always come from the active volume, resolved at open time. */
+    const char *volume = storage_active_volume_locked();
     s_io_locked = true;   /* header parsing runs under this hold */
     bool ok = false;
     struct stat st;
-    if (!storage_mounted_locked(c->volume)) set_error("volume is not mounted");
+    if (volume) snprintf(path, sizeof path, "%s/%s", storage_root(volume), c->relative);
+    if (!volume) set_error("no storage volume mounted");
     else if (!(s_file = fopen(path, "rb"))) set_error("cannot open file");
     else if (fstat(fileno(s_file), &st)) set_error("cannot stat file");
     else {
@@ -186,14 +188,14 @@ static bool open_file(const cmd_t *c)
         audio_src_result_t r = audio_source_open(&s_src, audio_format_from_name(c->relative), &io);
         if (r != AUDIO_SRC_OK) set_error(audio_src_text(r));
         else {
-            snprintf(s_file_volume, sizeof s_file_volume, "%s", c->volume);
+            snprintf(s_file_volume, sizeof s_file_volume, "%s", volume);
             snprintf(s_file_relative, sizeof s_file_relative, "%s", c->relative);
             s_byte_rate = s_src.sample_rate * s_src.channels * 2;
             /* FLAC may omit its length: then the duration is unknown (0). */
             uint32_t duration_ms = (uint32_t)(s_src.total_frames * 1000 / s_src.sample_rate);
             taskENTER_CRITICAL(&s_mux);
             s_status.state = AUDIO_PLAYING;
-            snprintf(s_status.volume_name, sizeof s_status.volume_name, "%s", c->volume);
+            snprintf(s_status.volume_name, sizeof s_status.volume_name, "%s", volume);
             snprintf(s_status.relative, sizeof s_status.relative, "%s", c->relative);
             snprintf(s_status.format, sizeof s_status.format, "%s",
                      s_src.format == AUDIO_FORMAT_FLAC ? "FLAC" : "WAV");
@@ -236,7 +238,7 @@ static void reader_task(void *arg)
             reading = false;
             if (c.op == CMD_PLAY && open_file(&c)) {
                 budget = s_status.loop ? (uint64_t)AUDIO_LOOP_LIMIT_MS / 1000 * s_src.sample_rate : UINT64_MAX;
-                ESP_LOGI(TAG, "playing %s/%s (%s %u-bit, %u Hz, %u ch%s)", c.volume, c.relative,
+                ESP_LOGI(TAG, "playing %s/%s (%s %u-bit, %u Hz, %u ch%s)", s_status.volume_name, c.relative,
                          s_status.format, s_src.source_bits, (unsigned)s_src.sample_rate,
                          s_src.channels, s_status.loop ? ", loop" : "");
                 reading = true;
@@ -332,13 +334,11 @@ bool audio_mgr_start(void)
     return true;
 }
 
-bool audio_mgr_play(const char *volume, const char *relative, bool loop)
+bool audio_mgr_play(const char *relative, bool loop)
 {
-    if (!s_status.available || !volume || !relative ||
-        (strcmp(volume, "sd") && strcmp(volume, "flash")) ||
+    if (!s_status.available || !relative ||
         strncmp(relative, "sounds/", 7) || !storage_file_allowed(relative)) return false;
     cmd_t c = { .op = CMD_PLAY, .loop = loop };
-    snprintf(c.volume, sizeof c.volume, "%s", volume);
     snprintf(c.relative, sizeof c.relative, "%s", relative);
     return xQueueSend(s_cmd, &c, 0) == pdTRUE;
 }

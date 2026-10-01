@@ -32,8 +32,8 @@ The leap table uses the IERS/IETF format. A table is used only when its
 matches, and every entry changes TAI−UTC by one second at a later instant.
 The hash detects file damage; it does not authenticate the source.
 
-- **Selection:** among the verified SD and flash tables, the latest `#$`
-  update wins, with SD winning a tie. With none, the built-in value
+- **Selection:** the active volume's table is used if it verifies
+  ([active volume](storage.md#active-volume)); otherwise the built-in value
   applies.
 - **Reselection:** uploads, deletes, `leap reload`, config reloads and
   volume mount changes reselect the table. The file rules are in
@@ -178,4 +178,4 @@ time state is INVALID. The top-bar label adds detail:
 - **Verified on hardware:** an RTC boot without a checkpoint (RTC_HOLD),
   and an RTC boot with a recent checkpoint (TRUSTED).
 - **Not yet measured:** RTC drift and true power-loss retention; see the
-  [implementation notes](../rlcd_time_scale_monitor_implementation_notes.md).
+  [roadmap](roadmap.md).

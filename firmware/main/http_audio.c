@@ -72,18 +72,17 @@ static esp_err_t post_play(httpd_req_t *req)
     cJSON *json = read_json(req, &error);
     if (!json) return fail(req, "400 Bad Request", error);
     cJSON *file = cJSON_GetObjectItemCaseSensitive(json, "file");
-    cJSON *storage = cJSON_GetObjectItemCaseSensitive(json, "storage");
     cJSON *loop = cJSON_GetObjectItemCaseSensitive(json, "loop");
-    if (!cJSON_IsString(file) || (storage && !cJSON_IsString(storage)) || (loop && !cJSON_IsBool(loop))) {
+    if (!cJSON_IsString(file) || (loop && !cJSON_IsBool(loop))) {
         cJSON_Delete(json);
-        return fail(req, "400 Bad Request", "need file (string); optional storage \\\"sd\\\"|\\\"flash\\\" and loop (bool)");
+        return fail(req, "400 Bad Request", "need file (string) and optional loop (bool)");
     }
     char relative[STORAGE_REL_MAX];
     const char *name = file->valuestring;
     snprintf(relative, sizeof relative, "%s%s", strncmp(name, "sounds/", 7) ? "sounds/" : "", name);
-    bool ok = audio_mgr_play(storage ? storage->valuestring : "sd", relative, cJSON_IsTrue(loop));
+    bool ok = audio_mgr_play(relative, cJSON_IsTrue(loop));
     cJSON_Delete(json);
-    if (!ok) return fail(req, "400 Bad Request", "invalid sounds/ path, storage or audio unavailable");
+    if (!ok) return fail(req, "400 Bad Request", "invalid sounds/ path or audio unavailable");
     /* Accepted: open/format errors appear in GET /audio once processed. */
     return send_status(req, "202 Accepted");
 }

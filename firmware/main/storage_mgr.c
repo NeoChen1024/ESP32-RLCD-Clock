@@ -64,6 +64,10 @@ bool storage_mounted_locked(const char *volume)
            !strcmp(volume, "flash") && s_flash != WL_INVALID_HANDLE;
 }
 uint32_t storage_generation_locked(void) { return s_generation; }
+const char *storage_active_volume_locked(void)
+{
+    return s_card ? "sd" : s_flash != WL_INVALID_HANDLE ? "flash" : NULL;
+}
 bool storage_space_locked(const char *volume, uint64_t *total, uint64_t *free_bytes)
 {
     const char *root = storage_root(volume);
@@ -264,6 +268,8 @@ int storage_mgr_command(int argc, char **argv, FILE *out)
     } else if (!strcmp(op, "status") && argc <= 2) result = status(out);
     else if (!strcmp(op, "mount") && argc == 2) {
         if (mount_card(false)) {
+            /* SD becomes the active volume: stop using flash files. */
+            audio_mgr_release_locked("flash", NULL);
             if (config_mgr_started()) config_mgr_reload_locked();
             result = status(out);
         }

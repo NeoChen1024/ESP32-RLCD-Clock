@@ -3,15 +3,15 @@
 This is the agreed design for scheduled events. Events can ring an alarm,
 or only appear in the upcoming list on the face. They are **not implemented
 yet**; progress is tracked in the
-[implementation notes](../rlcd_time_scale_monitor_implementation_notes.md).
+[roadmap](roadmap.md).
 Playback is already in place (see [audio](audio.md)).
 
 ## Files
 
 - Each event is one file, `events/<name>.json`, using the managed ASCII
   file-name rules. There are at most 32 events.
-- If SD has an `events/` directory, only SD is used; otherwise internal
-  flash is used. The two volumes are never merged.
+- Only the [active volume](storage.md#active-volume)'s `events/` is used;
+  the volumes are never merged.
 - Event files are not versioned. HTTP uploads and device updates replace
   them in place through the `.rlcd-txn` journal, like `wifi.json` and the
   leap table.

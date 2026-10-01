@@ -1,11 +1,11 @@
-# RLCD Time Scale Monitor — Implementation Notes
+# RLCD Time Scale Monitor — Roadmap
 
 This is the active scope and progress tracker for the Waveshare ESP32-S3
 RLCD 4.2 time-scale instrument. The current product behavior and data flow
-are described in [architecture](docs/architecture.md) and the subsystem
+are described in [architecture](architecture.md) and the subsystem
 documents it links; board facts and the
-RTC power boundary live in [hardware notes](docs/hardware_notes.md). Use the
-[README](README.md) for build and usage instructions.
+RTC power boundary live in [hardware notes](hardware_notes.md). Use the
+[README](../README.md) for build and usage instructions.
 
 ## Current state
 
@@ -13,17 +13,18 @@ The single 400×300 face and SDL3 host simulator are working. The firmware
 renders that face on the ST7305, acquires trusted time through Wi-Fi SNTP,
 supports bounded PCF85063A boot holdover, and shows SHTC3, battery and Wi-Fi
 telemetry. Storage is available on SD and internal wear-levelled FAT; the
-English HTTP file manager and API manage versioned JSON config and WAV files.
-Config selection is SD-first with fallback to older valid versions and then
-internal flash. POSIX TZ rules and NTP-server keys are applied, and a
-verified `time/leap-seconds.list` supplies TAI−UTC.
+English HTTP file manager and API manage versioned JSON config, secrets,
+the leap table and WAV/FLAC sounds. The device uses one active volume: SD
+while mounted, otherwise flash. Config uses the newest valid version there.
+POSIX TZ rules, NTP-server and audio-volume keys are applied, and a verified
+`time/leap-seconds.list` supplies TAI−UTC.
 
 ## Remaining work
 
 | Area | Next work | Status |
 | --- | --- | --- |
 | Leap table presentation | Decide how the face marks an expired or missing leap table, and adjust the layout around the unused band between the GPS row and telemetry. | Open |
-| Events | Implement the agreed [events design](docs/events.md): per-file `events/` rules, ringing and display-only events, upcoming list on the face, button dismissal. | Next |
+| Events | Implement the agreed [events design](events.md): per-file `events/` rules, ringing and display-only events, upcoming list on the face, button dismissal. | Next |
 | RTC power and drift | Verify backup operation across a true power loss and measure RTC drift before considering calibration. The current test board has no RTC backup battery available. | Deferred until hardware is available |
 | Visual assets | Replace stock u8g2 fonts/text placeholders with a small shared font/icon asset set if the current face needs it. | Planned |
 | Validation and power | Add representative host↔target screenshot parity cases, injected sensor-failure coverage on hardware, low-battery presentation and power-behavior measurements. | Planned |
@@ -37,8 +38,9 @@ verified `time/leap-seconds.list` supplies TAI−UTC.
   RTC_HOLD while the RTC cross-check passes; only INVALID time masks the
   face or stops events.
 - Use HTTP web page + file API for SD/internal-flash file management. FTP is
-  not implemented. New config versions preserve older files; selection is
-  based on descending filename order, with SD preferred over flash.
+  not implemented. Only the active volume (SD while mounted, else flash) is
+  used, and the two are never merged. New config versions preserve older
+  files; selection is by descending filename order.
 - Wi-Fi credentials live only in the write-only `secrets/wifi.json`. They are
   never stored in NVS or served over HTTP. CLI overrides stay in RAM. Other
   user config belongs in versioned files, while NVS stores only the RTC

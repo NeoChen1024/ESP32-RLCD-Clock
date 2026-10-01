@@ -13,7 +13,6 @@ PCF85063A RTC. There is no GNSS or PPS. A three-state trust model
 
 ```
 AGENTS.md                                            env, hardware facts, bring-up gotchas
-rlcd_time_scale_monitor_implementation_notes.md      active progress and agreed scope
 common/                                              shared pure-C render, clock and storage code
   time_model.{h,c} render_faces.{h,c} frame_export.{h,c} display_geometry.h
   clock_health.{h,c} sensor_health.{h,c} storage_files.{h,c}
@@ -68,8 +67,10 @@ cd firmware
 idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
 ```
 
-First-time setup on either volume, over HTTP or by copying files onto the
-SD card:
+The device uses one **active volume**: the SD card while it is mounted,
+otherwise internal flash. Put these files on the active volume, over HTTP or
+by copying them onto the SD card. Moving to a new card? The web "Send to"
+button and `POST /fs/copy` copy files between the volumes.
 
 - **Known Wi-Fi networks:** copy `wifi.json.example` to `secrets/wifi.json`
   ([network](docs/network.md#known-networks)).
@@ -92,7 +93,7 @@ Until Wi-Fi is configured, use `wifi connect` on the serial console.
 | `tz [<POSIX rule> \| ±HH:MM \| minutes \| reset]` | [Local time](docs/time.md#local-time) |
 | `leap [status] \| reload` | [Leap table](docs/time.md#time-scales) |
 | `config [status] \| reload \| cleanup [sd\|flash] [confirm]` | [Config versions](docs/storage.md#configuration-versions) |
-| `audio play [sd\|flash] "<file>" [loop] \| stop \| volume [0-100\|reset] \| status` | [Playback](docs/audio.md) |
+| `audio play "<file>" [loop] \| stop \| volume [0-100\|reset] \| status` | [Playback](docs/audio.md) from the active volume |
 | `sd status \| mount \| unmount \| ls \| cat \| test \| format` | SD card (`format` erases it; unmount before removal) |
 | `flash status \| mount \| init` | Internal FAT |
 | `sensor`, `http` | Telemetry readout, HTTP endpoints |
@@ -110,6 +111,7 @@ curl -T alarm.flac  http://<device>/fs/sd/sounds/alarm.flac
 curl -T leap-seconds.list http://<device>/fs/sd/time/leap-seconds.list
 curl http://<device>/fs/sd/cleanup                               # preview
 curl -X POST http://<device>/fs/sd/cleanup                       # delete older versions
+curl -X POST -d '{"from":"flash","to":"sd","path":"secrets/wifi.json"}' http://<device>/fs/copy
 curl -X POST -d '{"file":"alarm.flac","loop":true}' http://<device>/audio/play
 curl -X POST http://<device>/audio/stop
 curl -X POST -d '{"level":70}' http://<device>/audio/volume       # or {"reset":true}
@@ -124,7 +126,7 @@ trusted LAN only.
 
 ## Project documentation
 
-- [Implementation notes](rlcd_time_scale_monitor_implementation_notes.md):
+- [Roadmap](docs/roadmap.md):
   active progress, remaining work and agreed design boundaries.
 - [Architecture](docs/architecture.md): overview of shared code, tasks,
   locks and data flow, with links to the subsystem contracts:
@@ -148,4 +150,4 @@ trusted LAN only.
 - **Not yet**: scheduled events ([design](docs/events.md)),
   leap-table status on the face, RTC drift calibration, custom icon fonts,
   low-battery visual polish —
-  see [remaining work](rlcd_time_scale_monitor_implementation_notes.md#remaining-work).
+  see [remaining work](docs/roadmap.md#remaining-work).
