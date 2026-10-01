@@ -85,7 +85,8 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   `ntp status | ntp server <host> | ntp reset`,
   `tz [<POSIX rule>|±HH:MM|minutes|reset]`, `leap status | reload`,
   `config status | reload | cleanup [sd|flash] [confirm]`,
-  `audio play [sd|flash] "<file>" | stop | volume [0-100|reset] | status`,
+  `audio play [sd|flash] "<file>" [loop] | stop | volume [0-100|reset] | status`
+  (a loop stops after 10 minutes),
   `rtc status`, `sensor`, `sd`,
   `flash status | mount | init`, `http status`. `linenoise`
   runs in dumb mode for the USB VFS.
@@ -111,7 +112,8 @@ idf.py -p /dev/ttyACM0 build flash  # replace with the port found on this host
   and `/fs/sd/` (versioned JSON configs, WAV sounds, the leap table and
   write-only Wi-Fi secrets).
 - **HTTP server** (:80): English homepage `/`, English file manager `/files`,
-  status `/status`, active config `/fs/active`, and `/snapshot.pbm` and
+  status `/status`, active config `/fs/active`, playback control `/audio`
+  (see below), and `/snapshot.pbm` and
   `/snapshot.bmp`. Snapshots encode via the shared `frame_export`, so
   host↔target exports are byte-comparable.
 - **NTP**: manual `ntp server` CLI > selected config `ntp_server` (SD first,
@@ -160,6 +162,10 @@ curl -T leap-seconds.list http://<device>/fs/sd/time/leap-seconds.list
 curl -T wifi.json http://<device>/fs/flash/secrets/wifi.json   # write-only
 curl http://<device>/fs/sd/cleanup                             # preview
 curl -X POST http://<device>/fs/sd/cleanup                     # delete older versions
+curl -X POST -d '{"file":"alarm.wav","loop":true}' http://<device>/audio/play
+curl -X POST http://<device>/audio/stop
+curl -X POST -d '{"level":70}' http://<device>/audio/volume     # or {"reset":true}
+curl http://<device>/audio                                      # playback status
 curl -o saved.json http://<device>/fs/flash/config/20260923T120000000Z.json
 curl -X DELETE http://<device>/fs/sd/sounds/alarm.wav
 ```

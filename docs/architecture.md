@@ -129,6 +129,15 @@ mark an expired or missing table.
 
 ## Audio playback
 
+Control: CLI `audio play [sd|flash] "<file>" [loop] | stop | volume | status`,
+or HTTP `GET /audio`, `POST /audio/play` with
+`{"file": "...", "storage": "sd"|"flash", "loop": bool}`, `POST /audio/stop`
+and `POST /audio/volume` with `{"level": 0..100}` or `{"reset": true}`. The
+file manager offers Play, Loop and Stop buttons. These requests only queue
+work. A play is answered with 202, and open or format errors then appear in
+`GET /audio`. Like the rest of the LAN API, these endpoints are
+unauthenticated.
+
 `sounds/*.wav` files must be 16-bit linear PCM (WAVE_FORMAT_PCM, or
 EXTENSIBLE with the PCM subformat), mono or stereo, at 8–48 kHz, and at most
 64 MiB. `common/wav_format.c` checks this both on upload and before
@@ -146,7 +155,13 @@ can refill. Each storage mount, unmount or format increments a generation
 counter, and a transfer that sees it change abandons its open file. Before
 unmounting or formatting a volume, or deleting or replacing a file, storage
 owners call `audio_mgr_release_locked()`. The reader closes that file, and
-the audio already buffered still plays. Volume 0 mutes. Volumes 1–100 map
+the audio already buffered still plays.
+
+Playback is either single or looped. A loop rewinds to the first sample of
+the data chunk with no gap, and stops after exactly 10 minutes of audio
+(`AUDIO_LOOP_LIMIT_MS`), even mid-pass. A single play is never cut. A loop
+request for a file of 10 minutes or longer plays it once, uncut. Volume 0
+mutes. Volumes 1–100 map
 linearly to −40…0 dB, replacing the library's −50…0 dB curve, which made
 mid-range settings very quiet. `esp_codec_dev` then subtracts about 2.4 dB
 of PA-gain compensation (6 dB PA gain, 3.3 V DAC into a 5 V PA), so 100 sets

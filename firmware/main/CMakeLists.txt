@@ -16,6 +16,7 @@ idf_component_register(
          "leap_mgr.c"
          "wifi_secrets.c"
          "audio_mgr.c"
+         "http_audio.c"
     INCLUDE_DIRS "."
     EMBED_TXTFILES "files.html" "home.html" "web_style.css"
     REQUIRES esp_wifi esp_netif nvs_flash esp_http_server lwip console esp_timer u8g2 esp_driver_usb_serial_jtag u8g2_st7305 esp_driver_i2c esp_adc fatfs sdmmc esp_driver_sdmmc wear_levelling esp_driver_i2s

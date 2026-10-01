@@ -13,7 +13,7 @@
   <progress id="progress" value="0" max="100" aria-label="Upload progress"></progress><p id="message" role="status" aria-live="polite"></p>
 </section>
 <section>
-  <div class="toolbar"><h2 id="heading" style="margin:0;flex:1">Files</h2><button id="up" hidden>Back to root</button><button id="cleanup">Clean up old versions</button><button id="newconfig">New config version</button></div>
+  <div class="toolbar"><h2 id="heading" style="margin:0;flex:1">Files</h2><button id="up" hidden>Back to root</button><button id="stopaudio">Stop audio</button><button id="cleanup">Clean up old versions</button><button id="newconfig">New config version</button></div>
   <div class="tablewrap"><table><thead><tr><th>Name</th><th>Size</th><th>Actions</th></tr></thead><tbody id="rows"></tbody></table></div>
 </section>
 <footer>Versions sort by filename; use UTC timestamp names for chronological order. Old versions remain available until you delete them. Unmount SD in the serial console before removing the card.<br>API: <code>GET /fs/active</code> shows the selected version. Use <code>/fs/flash/…</code> or <code>/fs/sd/…</code> for GET, PUT and DELETE.</footer>
@@ -77,6 +77,10 @@ async function list(){
       if(folder==='secrets/'){const note=document.createElement('span');note.className='muted';note.textContent='Write-only';actions.append(note)}
       else{const link=document.createElement('a');link.href=url(path);link.textContent='Download';link.download=entry.name;actions.append(link)}
       if(folder==='config/') actions.append(button('Edit as new version',()=>edit(path)));
+      if(folder==='sounds/'){
+        actions.append(button('Play',()=>play(path,false)));
+        actions.append(button('Loop',()=>play(path,true)));
+      }
       actions.append(button('Delete',async()=>{
         if(busy||!confirm('Delete '+labels[$('volume').value]+' /'+path+'?'))return;
         await api(url(path),{method:'DELETE'});message('Deleted '+path);await refresh();
@@ -143,6 +147,12 @@ $('save').onclick=async()=>{
   }catch(e){$('editerror').textContent=e.message}finally{$('save').disabled=false}
 };
 $('cancel').onclick=()=>$('editor').close();
+async function play(path,loop){
+  const r=await api('/audio/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({storage:$('volume').value,file:path,loop})});
+  await r.json();message((loop?'Looping ':'Playing ')+path+(loop?' (stops after 10 minutes)':''));
+  setTimeout(()=>api('/audio').then(r=>r.json()).then(a=>{if(a.error)message('Audio: '+a.error,true)}).catch(()=>{}),1500);
+}
+$('stopaudio').onclick=()=>api('/audio/stop',{method:'POST'}).then(()=>message('Audio stopped.')).catch(e=>message(e.message,true));
 let cleanupVolume='';
 function cleanupItems(items){
   $('cleanuplist').replaceChildren(...items.map(path=>{const li=document.createElement('li');li.textContent=path;return li}));

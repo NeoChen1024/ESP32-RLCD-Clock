@@ -10,6 +10,7 @@
  *   GET /status      JSON with Wi-Fi / SNTP / time state
  *   GET /snapshot.pbm  P4 PBM of the current framebuffer
  *   GET /snapshot.bmp  1-bit BMP of the current framebuffer
+ *   GET /audio, POST /audio/... playback control (http_audio.h)
  * Snapshot routes are read-only; file mutations use /fs/...
  */
 

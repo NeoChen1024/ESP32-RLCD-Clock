@@ -273,14 +273,16 @@ static int cmd_leap(int argc, char **argv)
 static int cmd_audio(int argc, char **argv)
 {
     const char *op = argc > 1 ? argv[1] : "status";
-    if (!strcmp(op, "play") && (argc == 3 || argc == 4)) {
-        const char *volume = argc == 4 ? argv[2] : "sd";
-        const char *name = argv[argc - 1];
+    bool loop = argc >= 4 && !strcmp(argv[argc - 1], "loop");
+    int args = argc - (loop ? 1 : 0);   /* trailing `loop` is a flag */
+    if (!strcmp(op, "play") && (args == 3 || args == 4)) {
+        const char *volume = args == 4 ? argv[2] : "sd";
+        const char *name = argv[args - 1];
         char relative[STORAGE_REL_MAX];
         /* Accept a bare file name or the managed sounds/ path. */
         snprintf(relative, sizeof relative, "%s%s", strncmp(name, "sounds/", 7) ? "sounds/" : "", name);
-        if (!audio_mgr_play(volume, relative)) { printf("cannot play %s/%s\n", volume, relative); return 1; }
-        printf("queued %s/%s\n", volume, relative);
+        if (!audio_mgr_play(volume, relative, loop)) { printf("cannot play %s/%s\n", volume, relative); return 1; }
+        printf("queued %s/%s%s\n", volume, relative, loop ? " (loop, 10 min limit)" : "");
         return 0;
     }
     if (!strcmp(op, "stop") && argc == 2) { audio_mgr_stop(); printf("stopped\n"); return 0; }
@@ -301,18 +303,21 @@ static int cmd_audio(int argc, char **argv)
         audio_status_t st;
         audio_mgr_status(&st);
         if (!st.available) { printf("audio: unavailable (codec init failed)\n"); return 1; }
-        if (st.state == AUDIO_PLAYING)
+        if (st.state == AUDIO_PLAYING) {
             printf("playing: %s/%s\nformat:  %lu Hz, %u ch, 16-bit\nposition: %lu.%03lu / %lu.%03lu s\n",
                    st.volume_name, st.relative, (unsigned long)st.sample_rate, st.channels,
                    (unsigned long)st.position_ms / 1000, (unsigned long)st.position_ms % 1000,
                    (unsigned long)st.duration_ms / 1000, (unsigned long)st.duration_ms % 1000);
+            if (st.loop) printf("loop:    pass %lu, %lu / %u s total\n", (unsigned long)st.loops + 1,
+                                (unsigned long)st.elapsed_ms / 1000, AUDIO_LOOP_LIMIT_MS / 1000);
+        }
         else printf("idle\n");
         printf("volume:  %d (%s)\nunderruns: %lu\n", st.volume,
                st.volume_override ? "CLI override" : "selected config", (unsigned long)st.underruns);
         if (st.last_error[0]) printf("last error: %s\n", st.last_error);
         return 0;
     }
-    printf("usage: audio play [sd|flash] <file> | stop | volume [0-100|reset] | status\n");
+    printf("usage: audio play [sd|flash] <file> [loop] | stop | volume [0-100|reset] | status\n");
     return 1;
 }
 
@@ -437,8 +442,8 @@ static void register_cmds(void)
         { .command = "leap", .help = "TAI-UTC table from time/leap-seconds.list: status | reload",
           .hint = "[status] | reload",
           .func = cmd_leap },
-        { .command = "audio", .help = "WAV playback: play [sd|flash] <sounds file> | stop | volume [0-100|reset] | status",
-          .hint = "play [sd|flash] \"<file>\" | stop | volume [0-100|reset] | status",
+        { .command = "audio", .help = "WAV playback: play [sd|flash] <sounds file> [loop] | stop | volume [0-100|reset] | status",
+          .hint = "play [sd|flash] \"<file>\" [loop] | stop | volume [0-100|reset] | status",
           .func = cmd_audio },
         { .command = "sensor", .help = "read SHTC3 temp/humidity and battery voltage",
           .func = cmd_sensor },

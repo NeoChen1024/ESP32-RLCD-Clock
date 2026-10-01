@@ -10,7 +10,7 @@
 #include "snapshot.h"
 #include "display.h"
 #include "model.h"
-#include "audio_mgr.h"
+#include "http_audio.h"
 #include "wifi_mgr.h"
 
 static const char *TAG = "http_srv";
@@ -136,18 +136,9 @@ static esp_err_t handler_status(httpd_req_t *req)
     else
         n += snprintf(body + n, sizeof body - (size_t)n,
                       "\"updated_unix\":null,\"expires_unix\":null,\"expired\":null},");
-    /* Managed paths are restricted to JSON-safe ASCII. */
-    audio_status_t a;
-    audio_mgr_status(&a);
-    n += snprintf(body + n, sizeof body - (size_t)n,
-                  "\"audio\":{\"available\":%s,\"state\":\"%s\",\"file\":\"%s%s%s\","
-                  "\"position_ms\":%lu,\"duration_ms\":%lu,\"volume\":%d,\"volume_source\":\"%s\","
-                  "\"underruns\":%lu,\"error\":\"%s\"},",
-                  a.available ? "true" : "false", a.state == AUDIO_PLAYING ? "playing" : "idle",
-                  a.state == AUDIO_PLAYING ? a.volume_name : "", a.state == AUDIO_PLAYING ? "/" : "",
-                  a.state == AUDIO_PLAYING ? a.relative : "", (unsigned long)a.position_ms,
-                  (unsigned long)a.duration_ms, a.volume, a.volume_override ? "cli" : "config",
-                  (unsigned long)a.underruns, a.last_error);
+    n += snprintf(body + n, sizeof body - (size_t)n, "\"audio\":");
+    n += http_audio_status_json(body + n, sizeof body - (size_t)n);
+    n += snprintf(body + n, sizeof body - (size_t)n, ",");
     n += snprintf(body + n, sizeof body - (size_t)n, "\"display_frames\":%lu}",
                   (unsigned long)display_frame_count());
 
@@ -175,7 +166,7 @@ bool http_srv_start(void)
     httpd_handle_t server = NULL;
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.uri_match_fn = httpd_uri_match_wildcard;
-    cfg.max_uri_handlers = 12;
+    cfg.max_uri_handlers = 16;
 
     if (httpd_start(&server, &cfg) != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start failed (port busy?)");
@@ -200,7 +191,7 @@ bool http_srv_start(void)
             return false;
         }
     }
-    if (!http_files_register(server)) { httpd_stop(server); return false; }
+    if (!http_files_register(server) || !http_audio_register(server)) { httpd_stop(server); return false; }
     ESP_LOGI(TAG, "HTTP server on :%d", cfg.server_port);
     return true;
 }
